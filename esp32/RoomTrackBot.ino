@@ -39,6 +39,7 @@
 */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
@@ -75,7 +76,7 @@ static const unsigned long POLL_INTERVAL_MS      = 2000;  // Step 13: Poll websi
 static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;  // Step 14: Heartbeat every 5s
 static const unsigned long IDLE_TIMEOUT_MS       = 20000; // Step 16: Idle reset after 20s
 static const unsigned long COOLDOWN_DURATION_MS  = 5000;  // Step 11: 5-second cooldown
-static const unsigned long HTTP_TIMEOUT_MS       = 6000;
+static const unsigned long HTTP_TIMEOUT_MS       = 12000; // 12 seconds for cloud API
 
 LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
 HardwareSerial dfSerial(2);
@@ -229,11 +230,14 @@ void searchPatient(String patientName) {
   showLCD("Searching...", patientName);
 
   if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure(); // Bypass SSL verification on ESP32
+
     HTTPClient http;
     http.setTimeout(HTTP_TIMEOUT_MS);
     String url = String(API_BASE) + "/visitor/search?name=" + urlEncode(patientName);
 
-    if (http.begin(url)) {
+    if (http.begin(secureClient, url)) {
       int httpCode = http.GET();
       if (httpCode == 200) {
         String res = http.getString();
@@ -334,10 +338,13 @@ void connectWiFi() {
 // Step 14: Send device heartbeat to backend every 5 seconds
 void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure();
+
   HTTPClient h;
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/heartbeat";
-  if (h.begin(url)) {
+  if (h.begin(secureClient, url)) {
     h.addHeader("Content-Type", "application/json");
     h.addHeader("X-API-Key", API_KEY);
     String b = "{\"ip_address\":\"" + WiFi.localIP().toString() + "\"}";
@@ -349,10 +356,13 @@ void sendHeartbeat() {
 // Step 13: Check for pending website requests every 2 seconds
 void pollWebsiteDispatch() {
   if (WiFi.status() != WL_CONNECTED) return;
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure();
+
   HTTPClient h;
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/next-patient";
-  if (!h.begin(url)) return;
+  if (!h.begin(secureClient, url)) return;
   h.addHeader("X-API-Key", API_KEY);
 
   int code = h.GET();
