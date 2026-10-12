@@ -45,8 +45,8 @@ BluetoothSerial SerialBT;
 const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
-// API Base via Port 5173 Reverse Proxy (Bypasses Windows Firewall completely)
-const char* API_BASE     = "http://10.34.106.79:5173/api";
+// Live Render Cloud Backend API
+const char* API_BASE     = "https://room-track-bot-backend.onrender.com/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
