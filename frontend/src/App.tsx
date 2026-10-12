@@ -14,7 +14,9 @@ const date=(s?:string)=>s?new Date(s.replace(' ','T')).toLocaleDateString(): 'â€
 const statusClass=(s:string)=>s==='Admitted'||s==='Occupied'?'good':s==='Discharged'||s==='Available'?'neutral':s==='Maintenance'?'warn':'blue';
 
 function VisitorApp(){
- const BASE=import.meta.env.VITE_API_URL||'http://localhost:4000/api';
+ const BASE = (import.meta.env.VITE_API_URL && !import.meta.env.VITE_API_URL.includes('localhost'))
+   ? import.meta.env.VITE_API_URL
+   : '/api';
  const [name,setName]=useState(''); const [patient,setPatient]=useState<any>(null); const [searched,setSearched]=useState(false);
  const [busy,setBusy]=useState(false); const [message,setMessage]=useState(''); const [error,setError]=useState('');
  async function search(e?:React.FormEvent){e?.preventDefault();setBusy(true);setError('');setMessage('');setPatient(null);setSearched(false);

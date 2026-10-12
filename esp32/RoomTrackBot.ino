@@ -1,26 +1,27 @@
 /*
   =============================================================================
-  ROOM TRACK BOT - ESP32 Bluetooth Terminal + Wi-Fi + LCD + DFPlayer Firmware
+  ROOM TRACK BOT - Complete ESP32 Firmware
   =============================================================================
   Features:
-  1. BLUETOOTH TERMINAL INPUT:
-     - Connect your phone using "Serial Bluetooth Terminal" app to "Room_Track_Bot".
-     - Type patient name (e.g., "John") -> searches database -> shows on LCD & speaks!
-     - Sends response back to your phone terminal!
-  2. ULTRASONIC SENSOR:
-     - Detects person walking up (< 40cm) and welcomes them on LCD.
-  3. DFPLAYER MINI AUDIO:
-     - Announces Floor & Room in English & Tamil!
-  4. 16x2 I2C LCD:
-     - Real-time location display.
-  5. WEBSITE DISPATCH:
-     - Automatically receives searches sent from website (/visitor).
+  1. PERSON DETECTION:
+     - Ultrasonic sensor detects person (< 40cm) continuously for 2 FULL SECONDS.
+     - Triggers Welcome on LCD & speaks Welcome Audio (English 0001 & Tamil 0002).
+  2. BLUETOOTH TERMINAL SEARCH:
+     - Connect via "Serial Bluetooth Terminal" app to "Room_Track_Bot".
+     - Type patient name -> searches database.
+     - Found: Displays on LCD + Speaks Floor & Room (English & Tamil) + Speaks Thank you.
+     - Not Found: Displays on LCD + Speaks "Patient Not Found" audio (Track 0007).
+  3. WEBSITE VISITOR SYNC:
+     - When someone clicks "SEND TO ROOM TRACK BOT" on phone/laptop website,
+       ESP32 immediately receives it, shows on LCD, and announces in voice!
+  4. ZERO FIREWALL ISSUES:
+     - Uses Port 5173 API Reverse Proxy so Windows Firewall never blocks ESP32!
 
   Pin Setup:
-  - LCD: SDA -> GPIO 21, SCL -> GPIO 22
+  - LCD: SDA -> GPIO 21, SCL -> GPIO 22 (Address: 0x27)
   - Ultrasonic: TRIG -> GPIO 5, ECHO -> GPIO 18 (via voltage divider)
-  - DFPlayer: RX -> GPIO 17 (ESP32 RX), TX -> GPIO 16 (ESP32 TX to DFPlayer RX)
-  - Bluetooth: Built-in ESP32 Bluetooth (Name: "Room_Track_Bot")
+  - DFPlayer Mini: RX -> GPIO 17 (ESP32 RX), TX -> GPIO 16 (ESP32 TX to DFPlayer RX via 1k resistor)
+  - Bluetooth: Built-in ESP32 (Name: "Room_Track_Bot")
   - GND: Common Ground
   =============================================================================
 */
@@ -34,7 +35,6 @@
 #include <HardwareSerial.h>
 #include "BluetoothSerial.h"
 
-// Check Bluetooth support
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
 #error Bluetooth is not enabled! Please check your board settings.
 #endif
@@ -42,11 +42,11 @@
 BluetoothSerial SerialBT;
 
 // ======================== WI-FI CONFIGURATION ========================
-const char* WIFI_SSID     = "LUCIFER";       // Your Hotspot SSID
-const char* WIFI_PASSWORD = "5544332211";   // Your Hotspot Password
+const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
+const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
-// Backend Server IP & Port (Running on PC)
-const char* API_BASE     = "http://10.34.106.79:4000/api";
+// API Base via Port 5173 Reverse Proxy (Bypasses Windows Firewall completely)
+const char* API_BASE     = "http://10.34.106.79:5173/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
@@ -56,7 +56,7 @@ static const int DF_RX_PIN = 17; // ESP32 RX (connect to DFPlayer TX)
 static const int DF_TX_PIN = 16; // ESP32 TX (connect to DFPlayer RX via 1k resistor)
 
 static const uint8_t LCD_ADDR = 0x27;
-static const int DF_VOLUME = 25;
+static const int DF_VOLUME = 30; // Max volume (0 to 30)
 static const unsigned long POLL_INTERVAL_MS = 2000;
 static const unsigned long HEARTBEAT_INTERVAL_MS = 20000;
 static const unsigned long HTTP_TIMEOUT_MS = 6000;
@@ -68,7 +68,11 @@ DFRobotDFPlayerMini player;
 bool playerReady = false;
 unsigned long lastPoll = 0;
 unsigned long lastHeartbeat = 0;
-unsigned long lastPersonDetectedTime = 0;
+
+// Continuous 2-second person detection tracking
+unsigned long personDetectedStartTime = 0;
+bool personCurrentlyInFront = false;
+unsigned long welcomeCooldownUntil = 0; // Cooldown after welcoming
 
 // ======================== HELPER FUNCTIONS ========================
 String lcdSafe(String s, size_t n = 16) {
@@ -87,9 +91,11 @@ void showLCD(String a, String b) {
 }
 
 void playTrack(uint16_t t) {
+  Serial.printf(">>> Playing Track: %d (Player Ready: %s)\n", t, playerReady ? "YES" : "NO");
   if (playerReady) {
-    player.playMp3Folder(t);
-    delay(750);
+    player.play(t);          // Plays root /0001.mp3
+    player.playMp3Folder(t); // Plays /MP3/0001.mp3
+    delay(900);              // Delay between audio clips
   }
 }
 
@@ -111,14 +117,14 @@ int floorIndex(String floor) {
 void announceLocation(String floor, String room) {
   int f = floorIndex(floor);
 
-  // English: [Floor] [Room number] [digits...]
+  // 1. English: [Floor 0010..0013] [Room number 0020] [Digits 0050..0059]
   playTrack(10 + f);
   playTrack(20);
   for (size_t i = 0; i < room.length(); i++) {
     if (isDigit(room[i])) playTrack(digitTrack(room[i], false));
   }
 
-  // Tamil: [Floor] [அறை எண்] [digits...]
+  // 2. Tamil: [Floor 0030..0033] [அறை எண் 0040] [Digits 0060..0069]
   playTrack(30 + f);
   playTrack(40);
   for (size_t i = 0; i < room.length(); i++) {
@@ -131,13 +137,15 @@ void handlePatient(JsonObject p) {
   String floor = String((const char*)(p["floor"] | ""));
   String room  = String((const char*)(p["room"]  | ""));
 
-  Serial.println(">>> Patient: " + name + " | Floor: " + floor + " | Room: " + room);
+  Serial.println(">>> Patient Found: " + name + " | Floor: " + floor + " | Room: " + room);
   showLCD(name, floor + " Room:" + room);
+  
+  // Audio playback of location in English and Tamil
   announceLocation(floor, room);
 
-  delay(1500);
+  delay(1200);
   showLCD("Thank you.....", "");
-  playTrack(5);
+  playTrack(5); // 0005.mp3: Thank you. நன்றி.
   delay(1500);
   showLCD("Room Track Bot", "BT: Ready");
 }
@@ -155,7 +163,7 @@ long getDistanceCm() {
   return (duration * 0.034) / 2;
 }
 
-// URL encode helper for patient names with spaces
+// URL encode helper for patient names
 String urlEncode(String str) {
   String encoded = "";
   for (size_t i = 0; i < str.length(); i++) {
@@ -214,9 +222,10 @@ void searchPatientFromBluetooth(String patientName) {
             handlePatient(p);
             return;
           } else {
+            // Patient not found
             SerialBT.println(">>> Patient '" + patientName + "' Not Found in Database!");
             showLCD(patientName, "Not Found!");
-            playTrack(10); // Track 10: Not found
+            playTrack(7); // 0007.mp3: Patient not found / நோயாளி விவரம் கிடைக்கவில்லை
             delay(2000);
             showLCD("Room Track Bot", "BT: Ready");
             return;
@@ -249,19 +258,14 @@ void connectWiFi() {
   delay(500);
   WiFi.mode(WIFI_STA);
   delay(100);
-  WiFi.setSleep(false); // Prevent WiFi power saving drops
+  WiFi.setSleep(false);
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   unsigned long start = millis();
-  int dots = 0;
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-    delay(500);
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+    delay(300);
     Serial.print(".");
-    dots++;
-    if (dots % 4 == 0) {
-      showLCD("Connecting WiFi", String(WIFI_SSID) + "..");
-    }
   }
   Serial.println();
 
@@ -271,19 +275,9 @@ void connectWiFi() {
     showLCD("WiFi Connected!", WiFi.localIP().toString());
     delay(1500);
   } else {
-    int st = WiFi.status();
-    Serial.printf(">>> WiFi Connection FAILED! Status Code: %d\n", st);
-    if (st == WL_NO_SSID_AVAIL) {
-      Serial.println("ERROR: Hotspot SSID not found! Check if Hotspot AP Band is set to 2.4 GHz!");
-      showLCD("Hotspot NotSeen", "Must use 2.4GHz");
-    } else if (st == WL_CONNECT_FAILED) {
-      Serial.println("ERROR: Password incorrect or connection rejected!");
-      showLCD("WiFi Failed", "Wrong Password?");
-    } else {
-      Serial.println("ERROR: Connection timed out!");
-      showLCD("WiFi Failed", "Status: " + String(st));
-    }
-    delay(2500);
+    Serial.println(">>> WiFi Failed to connect! Check Hotspot settings.");
+    showLCD("WiFi Failed", "Check Hotspot");
+    delay(1500);
   }
 }
 
@@ -336,9 +330,23 @@ void setup() {
   showLCD("Room Track Bot", "Starting...");
 
   // Setup DFPlayer (RX=GPIO 17, TX=GPIO 16)
+  Serial.println("\nInitializing DFPlayer Mini...");
   dfSerial.begin(9600, SERIAL_8N1, DF_RX_PIN, DF_TX_PIN);
+  delay(1200); // Allow SD card to power up properly
+
   playerReady = player.begin(dfSerial, false, false);
-  if (playerReady) player.volume(DF_VOLUME);
+  if (!playerReady) {
+    delay(500);
+    playerReady = player.begin(dfSerial);
+  }
+
+  if (playerReady) {
+    Serial.println(">>> [SUCCESS] DFPlayer Mini Initialized Online!");
+    player.volume(DF_VOLUME); // Max volume 30
+    delay(200);
+  } else {
+    Serial.println(">>> [WARNING] DFPlayer Mini NOT DETECTED! Check RX/TX wires & 5V power.");
+  }
 
   // Connect Wi-Fi
   connectWiFi();
@@ -347,22 +355,17 @@ void setup() {
   SerialBT.begin("Room_Track_Bot"); // Bluetooth Name shown on phone
   Serial.println("Bluetooth Started! Connect to: Room_Track_Bot");
 
-  if (playerReady) {
-    playTrack(1); // Welcome English
-    playTrack(2); // Welcome Tamil
-  }
-
   showLCD("Room Track Bot", "BT: Ready");
 }
 
 void loop() {
-  // Reconnect WiFi if lost
+  // Reconnect WiFi if disconnected
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.reconnect();
     delay(200);
   }
 
-  // 1. Bluetooth Input Processing (From "Serial Bluetooth Terminal" App)
+  // 1. Bluetooth Input Processing (From Phone Terminal App)
   if (SerialBT.available()) {
     String command = SerialBT.readStringUntil('\n');
     command.trim();
@@ -383,19 +386,43 @@ void loop() {
     heartbeat();
   }
 
-  // 4. Ultrasonic Sensor Person Detection (< 40 cm)
-  if (millis() - lastPersonDetectedTime > 5000) {
+  // 4. Ultrasonic Sensor: Person Detected for 2 CONTINUOUS SECONDS
+  if (millis() > welcomeCooldownUntil) {
     long distance = getDistanceCm();
+
+    // Check if a person is standing within 40cm
     if (distance > 2 && distance < 40) {
-      Serial.printf("Person detected at %ld cm!\n", distance);
-      lastPersonDetectedTime = millis();
-      showLCD("Welcome!", "Send Name on BT");
-      SerialBT.println("Hello! Please type patient name to search:");
-      delay(2000);
-      showLCD("Room Track Bot", "BT: Ready");
-      lastPersonDetectedTime = millis();
+      if (!personCurrentlyInFront) {
+        // Person just arrived, start 2-second timer
+        personCurrentlyInFront = true;
+        personDetectedStartTime = millis();
+        Serial.println("Person detected... Waiting 2 seconds confirmation.");
+      } else {
+        // Person is still standing in front
+        if (millis() - personDetectedStartTime >= 2000) {
+          // YES! Person stood continuously for 2 FULL seconds
+          Serial.println(">>> Person confirmed (2s continuous)! Playing Welcome...");
+          
+          showLCD("Welcome!", "Send Name on BT");
+          SerialBT.println("Hello! Welcome to Room Track Bot. Please type patient name to search:");
+          
+          // Play Welcome Audio
+          playTrack(1); // 0001.mp3: Welcome English
+          playTrack(2); // 0002.mp3: Welcome Tamil
+
+          delay(1500);
+          showLCD("Room Track Bot", "BT: Ready");
+
+          // Reset and set 10 seconds cooldown so it doesn't repeatedly trigger
+          personCurrentlyInFront = false;
+          welcomeCooldownUntil = millis() + 10000;
+        }
+      }
+    } else {
+      // Person moved away before 2 seconds completed
+      personCurrentlyInFront = false;
     }
   }
 
-  delay(20);
+  delay(30);
 }

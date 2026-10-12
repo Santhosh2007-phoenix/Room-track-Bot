@@ -109,7 +109,7 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     }
 
     const { text } = await sttRes.json();
-    const transcribedName = text.replace(/[^a-zA-Z0-9 ]/g, '').trim();
+    const transcribedName = (text || '').replace(/\0/g, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
 
     // Log the search
     const logSearch = async (found, id, floor, room) => {

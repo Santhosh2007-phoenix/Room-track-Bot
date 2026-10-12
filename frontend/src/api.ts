@@ -1,5 +1,7 @@
 
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const BASE = (import.meta.env.VITE_API_URL && !import.meta.env.VITE_API_URL.includes('localhost'))
+  ? import.meta.env.VITE_API_URL
+  : '/api';
 export function getToken(){return localStorage.getItem('rtb_token')||''}
 export function setToken(t:string){localStorage.setItem('rtb_token',t)}
 export function clearToken(){localStorage.removeItem('rtb_token')}
