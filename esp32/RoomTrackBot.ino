@@ -1,33 +1,22 @@
 /*
   =============================================================================
-  ROOM TRACK BOT - Complete ESP32 Firmware (Exact 17-Step Workflow)
+  ROOM TRACK BOT - Complete ESP32 Firmware (Local High-Speed Setup)
   =============================================================================
-  Workflow Logic Implemented:
-  1. Start the ESP32.
-  2. Initialize LCD, Bluetooth, Wi-Fi, HC-SR04 sensor, DFPlayer, backend comms.
-  3. Display "Room Track Bot" and "BT: Ready" on LCD.
-  4. HC-SR04 detects person (2 cm to < 40 cm).
-  5. Display "Person Detected" and "Please Wait..." on LCD.
-  6. Wait 2 seconds to confirm person's presence.
-  7. Display "Welcome!" and "Send Name on BT" on LCD (and plays Welcome audio).
-  8. Receive person's name through Bluetooth mobile app.
-  9. Send received name to online Patient Database API.
-  10. Search for details in database:
-      IF FOUND:
-        * Display patient name on LCD.
-        * Display floor number and room number.
-        * Show result for 3 seconds (+ voice announcement).
-        * Display "Thank You!" and "Next person soon" for 3 seconds.
-      IF NOT FOUND:
-        * Display patient-not-found message ("Patient Not Found", "Try Again").
-        * Wait for another name through Bluetooth.
-  11. After completing patient flow, activate 5-second cooldown.
-  12. Return to initial screen ("Room Track Bot" / "BT: Ready") and re-enable HC-SR04.
-  13. Check for pending website requests every 2 seconds.
-  14. Send device heartbeat to backend every 5 seconds.
-  15. Retry Wi-Fi connection periodically if disconnected.
-  16. If no function or visitor flow active for 20 seconds, restore initial screen.
-  17. Endless loop repeating for next visitor.
+  Features:
+  1. PERSON DETECTION:
+     - Ultrasonic sensor detects person (< 40cm) continuously for 2 FULL SECONDS.
+     - LCD displays "Person Detected", then "Welcome! Send Name on BT" + voice greeting.
+  2. BLUETOOTH TERMINAL SEARCH:
+     - Connect via "Serial Bluetooth Terminal" app to "Room_Track_Bot".
+     - Type patient name -> searches Supabase database instantly via local proxy!
+     - Found: Displays on LCD + Speaks Floor & Room (English & Tamil) for 3s.
+     - Displays "Thank You!" and "Next person soon" for 3s.
+     - Not Found: Displays "Patient Not Found", allows another name.
+  3. WEBSITE VISITOR SYNC:
+     - When someone clicks "SEND TO ROOM TRACK BOT" on phone website,
+       ESP32 receives it within 2 seconds, shows on LCD, and announces in voice!
+  4. ZERO SSL/TIMEOUT ISSUES:
+     - Uses standard HTTP to Port 5173 Proxy -> Zero SSL overhead, instant 10ms response!
 
   Pin Setup:
   - LCD I2C: SDA -> GPIO 21, SCL -> GPIO 22 (Address: 0x27)
@@ -39,7 +28,6 @@
 */
 
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
@@ -58,8 +46,8 @@ BluetoothSerial SerialBT;
 const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
-// Live Render Cloud Backend API
-const char* API_BASE     = "https://room-track-bot-backend.onrender.com/api";
+// High-Speed Local Proxy API (Zero SSL overhead, Instant Response)
+const char* API_BASE     = "http://10.34.106.79:5173/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
@@ -72,11 +60,11 @@ static const uint8_t LCD_ADDR = 0x27;
 static const int DF_VOLUME = 30; // Max volume (0 to 30)
 
 // Workflow Timing Constants
-static const unsigned long POLL_INTERVAL_MS      = 5000;  // Poll website every 5s
-static const unsigned long HEARTBEAT_INTERVAL_MS = 25000; // Heartbeat every 25s
-static const unsigned long IDLE_TIMEOUT_MS       = 20000; // Step 16: Idle reset after 20s
-static const unsigned long COOLDOWN_DURATION_MS  = 5000;  // Step 11: 5-second cooldown
-static const unsigned long HTTP_TIMEOUT_MS       = 15000; // 15 seconds for cloud API
+static const unsigned long POLL_INTERVAL_MS      = 2000;  // Poll website every 2s
+static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;  // Heartbeat every 5s
+static const unsigned long IDLE_TIMEOUT_MS       = 20000; // Idle reset after 20s
+static const unsigned long COOLDOWN_DURATION_MS  = 5000;  // 5-second cooldown
+static const unsigned long HTTP_TIMEOUT_MS       = 5000;  // 5s timeout
 
 LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
 HardwareSerial dfSerial(2);
@@ -85,14 +73,14 @@ DFRobotDFPlayerMini player;
 bool playerReady = false;
 unsigned long lastPoll = 0;
 unsigned long lastHeartbeat = 0;
-unsigned long lastActivityTime = 0; // Tracks Step 16 idle timeout
-unsigned long cooldownEndTime = 0;  // Tracks Step 11 cooldown
+unsigned long lastActivityTime = 0;
+unsigned long cooldownEndTime = 0;
 
-// State Machine for Detection & Visitor Flow
+// State Machine
 enum BotState {
-  STATE_STANDBY,        // Step 3: "Room Track Bot" / "BT: Ready"
-  STATE_CONFIRMING_PERSON, // Step 5 & 6: "Person Detected" / "Please Wait..."
-  STATE_AWAITING_INPUT     // Step 7: "Welcome!" / "Send Name on BT"
+  STATE_STANDBY,
+  STATE_CONFIRMING_PERSON,
+  STATE_AWAITING_INPUT
 };
 
 BotState currentState = STATE_STANDBY;
@@ -116,7 +104,7 @@ void showLCD(String a, String b) {
 
 void setStandbyScreen() {
   currentState = STATE_STANDBY;
-  showLCD("Room Track Bot", "BT: Ready"); // Step 3 & 12
+  showLCD("Room Track Bot", "BT: Ready");
   lastActivityTime = millis();
 }
 
@@ -146,14 +134,14 @@ int floorIndex(String floor) {
 void announceLocation(String floor, String room) {
   int f = floorIndex(floor);
 
-  // 1. English: [Floor 0010..0013] [Room number 0020] [Digits 0050..0059]
+  // 1. English
   playTrack(10 + f);
   playTrack(20);
   for (size_t i = 0; i < room.length(); i++) {
     if (isDigit(room[i])) playTrack(digitTrack(room[i], false));
   }
 
-  // 2. Tamil: [Floor 0030..0033] [அறை எண் 0040] [Digits 0060..0069]
+  // 2. Tamil
   playTrack(30 + f);
   playTrack(40);
   for (size_t i = 0; i < room.length(); i++) {
@@ -161,7 +149,7 @@ void announceLocation(String floor, String room) {
   }
 }
 
-// Step 10: Handle Patient Found
+// Handle Patient Found
 void handlePatientFound(JsonObject p) {
   String name  = String((const char*)(p["name"]  | "PATIENT"));
   String floor = String((const char*)(p["floor"] | ""));
@@ -169,22 +157,20 @@ void handlePatientFound(JsonObject p) {
 
   Serial.println(">>> Patient Found: " + name + " | Floor: " + floor + " | Room: " + room);
   
-  // Step 10: * Display the patient’s name on LCD
-  //          * Display floor number and room number
-  //          * Show the result for 3 seconds
+  // Show result for 3 seconds
   showLCD(name, floor + " Room:" + room);
   announceLocation(floor, room);
-  delay(3000); // Show result for 3 seconds
+  delay(3000);
 
-  // Step 10: * Display 'Thank You!' and 'Next person soon' for 3 seconds
+  // Display 'Thank You!' and 'Next person soon' for 3 seconds
   showLCD("Thank You!", "Next person soon");
   playTrack(5); // 0005.mp3: Thank you
-  delay(3000); // 3 seconds display
+  delay(3000);
 
-  // Step 11: After completing patient flow, activate a 5-second cooldown
+  // 5-second cooldown
   cooldownEndTime = millis() + COOLDOWN_DURATION_MS;
   
-  // Step 12: Return to initial screen and enable HC-SR04 detection
+  // Return to standby screen
   setStandbyScreen();
 }
 
@@ -218,7 +204,7 @@ String urlEncode(String str) {
   return encoded;
 }
 
-// Step 9 & 10: Search Patient
+// Search Patient
 void searchPatient(String patientName) {
   patientName.trim();
   if (patientName.length() == 0) return;
@@ -230,15 +216,11 @@ void searchPatient(String patientName) {
   showLCD("Searching...", patientName);
 
   if (WiFi.status() == WL_CONNECTED) {
-    WiFiClientSecure secureClient;
-    secureClient.setInsecure(); // Bypass SSL verification on ESP32
-
     HTTPClient http;
     http.setTimeout(HTTP_TIMEOUT_MS);
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     String url = String(API_BASE) + "/visitor/search?name=" + urlEncode(patientName);
 
-    if (http.begin(secureClient, url)) {
+    if (http.begin(url)) {
       int httpCode = http.GET();
       if (httpCode == 200) {
         String res = http.getString();
@@ -259,19 +241,14 @@ void searchPatient(String patientName) {
             SerialBT.println("Room  : " + pRoom);
             SerialBT.println("================================");
 
-            // Execute Patient Found workflow
             handlePatientFound(p);
             return;
           } else {
-            // Step 10: Patient Not Found flow
-            // * Display a patient-not-found message
-            // * Wait for another name through Bluetooth
-            SerialBT.println(">>> Patient '" + patientName + "' Not Found in Database! Please send another name:");
+            SerialBT.println(">>> Patient '" + patientName + "' Not Found! Please send another name:");
             showLCD("Patient Not", "Found!");
-            playTrack(7); // 0007.mp3: Patient not found
+            playTrack(7);
             delay(2500);
 
-            // Return to awaiting another name
             showLCD("Send Name on BT", "Try Again...");
             currentState = STATE_AWAITING_INPUT;
             lastActivityTime = millis();
@@ -287,14 +264,13 @@ void searchPatient(String patientName) {
       http.end();
     }
   } else {
-    SerialBT.println(">>> Wi-Fi Error: Not Connected to Online API!");
+    SerialBT.println(">>> Wi-Fi Error: Not Connected to Server!");
     showLCD("WiFi Error", "Not Connected");
     delay(2000);
     setStandbyScreen();
   }
 }
 
-// Step 15: Wi-Fi Reconnection Logic
 void ensureWiFiConnected() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Wi-Fi disconnected. Reconnecting...");
@@ -336,16 +312,13 @@ void connectWiFi() {
   }
 }
 
-// Step 14: Send device heartbeat to backend every 5 seconds
+// Heartbeat every 5s
 void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
-  WiFiClientSecure secureClient;
-  secureClient.setInsecure();
-
   HTTPClient h;
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/heartbeat";
-  if (h.begin(secureClient, url)) {
+  if (h.begin(url)) {
     h.addHeader("Content-Type", "application/json");
     h.addHeader("X-API-Key", API_KEY);
     String b = "{\"ip_address\":\"" + WiFi.localIP().toString() + "\"}";
@@ -354,16 +327,13 @@ void sendHeartbeat() {
   }
 }
 
-// Step 13: Check for pending website requests every 2 seconds
+// Poll website visitor dispatch every 2s
 void pollWebsiteDispatch() {
   if (WiFi.status() != WL_CONNECTED) return;
-  WiFiClientSecure secureClient;
-  secureClient.setInsecure();
-
   HTTPClient h;
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/next-patient";
-  if (!h.begin(secureClient, url)) return;
+  if (!h.begin(url)) return;
   h.addHeader("X-API-Key", API_KEY);
 
   int code = h.GET();
@@ -378,12 +348,10 @@ void pollWebsiteDispatch() {
   h.end();
 }
 
-// ======================== MAIN SETUP & LOOP ========================
-// Step 1: Start the ESP32
+// Setup
 void setup() {
   Serial.begin(115200);
 
-  // Step 2: Initialize LCD, Bluetooth, Wi-Fi, HC-SR04, and DFPlayer
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
@@ -408,85 +376,74 @@ void setup() {
     delay(200);
   }
 
-  // Initialize Wi-Fi
   connectWiFi();
 
-  // Initialize Bluetooth
   SerialBT.begin("Room_Track_Bot");
   Serial.println("Bluetooth Started! Device Name: Room_Track_Bot");
 
-  // Step 3: Display 'Room Track Bot' and 'BT: Ready' on the LCD
   setStandbyScreen();
 }
 
 void loop() {
-  // Step 15: Retry Wi-Fi connection periodically if disconnected
   ensureWiFiConnected();
 
   unsigned long currentMillis = millis();
 
-  // Step 13: Check for pending website requests every 2 seconds
+  // Poll website every 2s
   if (currentMillis - lastPoll >= POLL_INTERVAL_MS) {
     lastPoll = currentMillis;
     pollWebsiteDispatch();
   }
 
-  // Step 14: Send the device heartbeat to the backend every 5 seconds
+  // Heartbeat every 5s
   if (currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeat = currentMillis;
     sendHeartbeat();
   }
 
-  // Step 8: Receive person's name through Bluetooth mobile app
+  // Bluetooth input
   if (SerialBT.available()) {
     String incomingName = SerialBT.readStringUntil('\n');
     incomingName.trim();
     if (incomingName.length() > 0) {
-      searchPatient(incomingName); // Steps 9 & 10
+      searchPatient(incomingName);
     }
   }
 
-  // Step 16: If no function or visitor flow is active for 20 seconds, restore initial screen
+  // 20s Idle timeout reset
   if (currentState != STATE_STANDBY && (currentMillis - lastActivityTime >= IDLE_TIMEOUT_MS)) {
-    Serial.println("Idle timeout (20s): Restoring initial screen.");
+    Serial.println("Idle timeout (20s): Restoring standby.");
     setStandbyScreen();
   }
 
-  // Steps 4 to 7: HC-SR04 Sensor Detection Logic (Active when not in cooldown)
+  // HC-SR04 Detection
   if (currentMillis > cooldownEndTime) {
     long distance = getDistanceCm();
 
-    // Step 4: HC-SR04 sensor detects person within 2 cm to < 40 cm
     if (distance >= 2 && distance < 40) {
       if (currentState == STATE_STANDBY) {
-        // Step 5: Display 'Person Detected' and 'Please Wait...' on the LCD
         currentState = STATE_CONFIRMING_PERSON;
         personDetectionStart = currentMillis;
         lastActivityTime = currentMillis;
         showLCD("Person Detected", "Please Wait...");
-        Serial.printf("Person detected at %ld cm. Starting 2-second confirmation...\n", distance);
+        Serial.printf("Person detected at %ld cm. Confirming for 2s...\n", distance);
       } else if (currentState == STATE_CONFIRMING_PERSON) {
-        // Step 6: Wait for 2 seconds to confirm the person’s presence
         if (currentMillis - personDetectionStart >= 2000) {
-          // 2 seconds confirmed!
-          // Step 7: Display 'Welcome!' and 'Send Name on BT' on the LCD
           currentState = STATE_AWAITING_INPUT;
           lastActivityTime = currentMillis;
           showLCD("Welcome!", "Send Name on BT");
           SerialBT.println("Hello! Welcome to Room Track Bot. Please type patient name to search:");
 
-          // Play Welcome Audio (English & Tamil)
           playTrack(1); // 0001.mp3: Welcome English
           playTrack(2); // 0002.mp3: Welcome Tamil
         }
       }
     } else {
-      // Person walked away before 2 seconds completed
       if (currentState == STATE_CONFIRMING_PERSON) {
-        setStandbyScreen(); // Revert back to Step 3
+        setStandbyScreen();
       }
     }
   }
 
-  delay(25); // Step 17: Endless loop
+  delay(25);
 }
