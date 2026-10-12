@@ -72,11 +72,11 @@ static const uint8_t LCD_ADDR = 0x27;
 static const int DF_VOLUME = 30; // Max volume (0 to 30)
 
 // Workflow Timing Constants
-static const unsigned long POLL_INTERVAL_MS      = 2000;  // Step 13: Poll website every 2s
-static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;  // Step 14: Heartbeat every 5s
+static const unsigned long POLL_INTERVAL_MS      = 5000;  // Poll website every 5s
+static const unsigned long HEARTBEAT_INTERVAL_MS = 25000; // Heartbeat every 25s
 static const unsigned long IDLE_TIMEOUT_MS       = 20000; // Step 16: Idle reset after 20s
 static const unsigned long COOLDOWN_DURATION_MS  = 5000;  // Step 11: 5-second cooldown
-static const unsigned long HTTP_TIMEOUT_MS       = 12000; // 12 seconds for cloud API
+static const unsigned long HTTP_TIMEOUT_MS       = 15000; // 15 seconds for cloud API
 
 LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
 HardwareSerial dfSerial(2);
@@ -234,8 +234,8 @@ void searchPatient(String patientName) {
     secureClient.setInsecure(); // Bypass SSL verification on ESP32
 
     HTTPClient http;
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(HTTP_TIMEOUT_MS);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     String url = String(API_BASE) + "/visitor/search?name=" + urlEncode(patientName);
 
     if (http.begin(secureClient, url)) {
@@ -280,17 +280,11 @@ void searchPatient(String patientName) {
         }
       } else {
         SerialBT.println(">>> Server Error Code: " + String(httpCode));
-        Serial.printf("HTTP GET failed, error code: %d, errStr: %s\n", httpCode, http.errorToString(httpCode).c_str());
         showLCD("Server Error", "Code: " + String(httpCode));
         delay(2000);
         setStandbyScreen();
       }
       http.end();
-    } else {
-      SerialBT.println(">>> HTTPClient begin failed!");
-      showLCD("Conn Failed", "Retry...");
-      delay(2000);
-      setStandbyScreen();
     }
   } else {
     SerialBT.println(">>> Wi-Fi Error: Not Connected to Online API!");
