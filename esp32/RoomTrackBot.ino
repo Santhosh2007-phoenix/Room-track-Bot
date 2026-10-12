@@ -234,6 +234,7 @@ void searchPatient(String patientName) {
     secureClient.setInsecure(); // Bypass SSL verification on ESP32
 
     HTTPClient http;
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.setTimeout(HTTP_TIMEOUT_MS);
     String url = String(API_BASE) + "/visitor/search?name=" + urlEncode(patientName);
 
@@ -279,11 +280,17 @@ void searchPatient(String patientName) {
         }
       } else {
         SerialBT.println(">>> Server Error Code: " + String(httpCode));
+        Serial.printf("HTTP GET failed, error code: %d, errStr: %s\n", httpCode, http.errorToString(httpCode).c_str());
         showLCD("Server Error", "Code: " + String(httpCode));
         delay(2000);
         setStandbyScreen();
       }
       http.end();
+    } else {
+      SerialBT.println(">>> HTTPClient begin failed!");
+      showLCD("Conn Failed", "Retry...");
+      delay(2000);
+      setStandbyScreen();
     }
   } else {
     SerialBT.println(">>> Wi-Fi Error: Not Connected to Online API!");
