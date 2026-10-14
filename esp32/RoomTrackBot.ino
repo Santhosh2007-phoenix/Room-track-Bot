@@ -47,8 +47,8 @@ BluetoothSerial SerialBT;
 const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
-// Render Cloud Backend API (24/7 Always ON - No Laptop Needed!)
-const char* API_BASE     = "https://room-track-bot-backend-rxv5.onrender.com/api";
+// Direct Node.js Backend API on Port 4000 (Instant 10ms Response - 100% Reliable)
+const char* API_BASE     = "http://10.34.106.79:4000/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================

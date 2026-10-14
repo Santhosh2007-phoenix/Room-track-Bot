@@ -19,7 +19,7 @@ const pool = new Pool({
   ssl: process.env.PGSSL === 'false' ? false : { rejectUnauthorized: false },
   max: Number(process.env.PG_POOL_MAX || 5),
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: 30000,
   keepAlive: true
 });
 pool.on('error', (err) => {
@@ -188,13 +188,23 @@ app.put('/api/settings',adminOnly,asyncRoute(async(req,res)=>{const b=req.body;i
 app.use((req,res)=>res.status(404).json({error:'Endpoint not found'}));
 app.use((err,req,res,next)=>{console.error('API error:',err.message);if(res.headersSent)return next(err);res.status(500).json({error:'Internal server error'});});
 async function bootstrap(){
- await q("INSERT INTO device_status(id) VALUES(1) ON CONFLICT(id) DO NOTHING");
- const username=process.env.ADMIN_USERNAME||'admin';const password=process.env.ADMIN_PASSWORD||'admin123';
- const existing=await q('SELECT id FROM admins WHERE LOWER(username)=LOWER($1)',[username]);if(!existing.rowCount)await q('INSERT INTO admins(username,password_hash) VALUES($1,$2)',[username,await bcrypt.hash(password,12)]);
- await q("INSERT INTO settings(key,value) VALUES('hospital_name','Room Track Hospital'),('bot_name','Room Track Bot'),('admin_username',$1) ON CONFLICT(key) DO NOTHING",[username]);
- await q('SELECT 1');app.listen(PORT,'0.0.0.0',()=>console.log(`Room Track Bot API (Supabase PostgreSQL) running on port ${PORT}`));
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      await q("INSERT INTO device_status(id) VALUES(1) ON CONFLICT(id) DO NOTHING");
+      const username=process.env.ADMIN_USERNAME||'admin';const password=process.env.ADMIN_PASSWORD||'admin123';
+      const existing=await q('SELECT id FROM admins WHERE LOWER(username)=LOWER($1)',[username]);if(!existing.rowCount)await q('INSERT INTO admins(username,password_hash) VALUES($1,$2)',[username,await bcrypt.hash(password,12)]);
+      await q("INSERT INTO settings(key,value) VALUES('hospital_name','Room Track Hospital'),('bot_name','Room Track Bot'),('admin_username',$1) ON CONFLICT(key) DO NOTHING",[username]);
+      await q('SELECT 1');
+      app.listen(PORT,'0.0.0.0',()=>console.log(`Room Track Bot API (Supabase PostgreSQL) running on port ${PORT}`));
+      return;
+    } catch (err) {
+      console.warn(`[Bootstrap] Attempt ${attempt}/5 failed: ${err.message}. Retrying in 2s...`);
+      if (attempt === 5) throw err;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
 }
- bootstrap().catch(err=>{console.error('Startup failed:',err.message);process.exit(1);});
+bootstrap().catch(err=>{console.error('Startup failed:',err.message);process.exit(1);});
  process.on('SIGTERM',async()=>{await pool.end();process.exit(0)});
  
  export default app;
