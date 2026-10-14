@@ -38,6 +38,9 @@ services:
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://room-track-bot-backend-rxv5.onrender.com/api
     routes:
       - type: rewrite
         source: /*

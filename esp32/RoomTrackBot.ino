@@ -47,8 +47,8 @@ BluetoothSerial SerialBT;
 const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
-// Direct Node.js Backend API on Port 4000 (Instant 10ms Response)
-const char* API_BASE     = "http://10.34.106.79:4000/api";
+// Render Cloud Backend API (24/7 Always ON - No Laptop Needed!)
+const char* API_BASE     = "https://room-track-bot-backend-rxv5.onrender.com/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
@@ -65,7 +65,7 @@ static const unsigned long POLL_INTERVAL_MS      = 2000;  // Poll website every 
 static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;  // Heartbeat every 5s
 static const unsigned long IDLE_TIMEOUT_MS       = 20000; // Idle reset after 20s
 static const unsigned long COOLDOWN_DURATION_MS  = 5000;  // 5-second cooldown
-static const unsigned long HTTP_TIMEOUT_MS       = 5000;  // 5s timeout
+static const unsigned long HTTP_TIMEOUT_MS       = 8000;  // 8s timeout for cloud requests
 
 LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
 HardwareSerial dfSerial(2);
