@@ -47,7 +47,7 @@ const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
 // High-Speed Local Proxy API (Zero SSL overhead, Instant Response)
-const char* API_BASE     = "http://10.34.106.79:5173/api";
+const char* API_BASE     = "http://10.31.207.79:5173/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
