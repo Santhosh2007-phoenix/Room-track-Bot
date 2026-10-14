@@ -110,53 +110,31 @@ void setStandbyScreen() {
 
 unsigned long getTrackDuration(uint16_t t) {
   switch (t) {
-    case 1:  return 4824;
-    case 2:  return 4608;
-    case 5:  return 2688;
-    case 7:  return 5088;
+    case 1:  return 5112; // Welcome English: "Welcome to Room Track Bot. Please send person name on Bluetooth."
+    case 2:  return 5904; // Welcome Tamil: "ரூம் ட்ராக் பாட்டிற்கு நல்வரவு. நபரின் பெயரை ப்ளூடூத்தில் அனுப்பவும்."
+    case 5:  return 2856; // Thank you English
+    case 7:  return 4440; // Person not found Tamil
 
-    case 10: return 1488;
-    case 11: return 1728;
-    case 12: return 1848;
-    case 13: return 1968;
-    case 14: return 1968; // 5th Floor English
+    case 10: return 1224; // First Floor English
+    case 11: return 1272; // Second Floor English
+    case 12: return 1152; // Third Floor English
+    case 13: return 1200; // Fourth Floor English
+    case 14: return 1200; // Fifth Floor English
 
-    case 20: return 1728; // Room Number English
+    case 20: return 1104; // Room Number English
 
-    case 30: return 1608;
-    case 31: return 1848;
-    case 32: return 1848;
-    case 33: return 1704;
-    case 34: return 1800; // 5th Floor Tamil
+    case 30: return 1368; // First Floor Tamil
+    case 31: return 1512; // Second Floor Tamil
+    case 32: return 1560; // Third Floor Tamil
+    case 33: return 1608; // Fourth Floor Tamil
+    case 34: return 1440; // Fifth Floor Tamil
 
-    case 40: return 1368;
-
-    case 50: return 1608;
-    case 51: return 1248;
-    case 52: return 1104;
-    case 53: return 1248;
-    case 54: return 1416;
-    case 55: return 1416;
-    case 56: return 1368;
-    case 57: return 1344;
-    case 58: return 1968;
-    case 59: return 1248;
-
-    case 60: return 1464;
-    case 61: return 1368;
-    case 62: return 1296;
-    case 63: return 1224;
-    case 64: return 1368;
-    case 65: return 1224;
-    case 66: return 1128;
-    case 67: return 1416;
-    case 68: return 1464;
-    case 69: return 1296;
+    case 40: return 1128; // Arai En Tamil
 
     default:
-      if (t >= 101 && t <= 505) return 1600;   // English: "Two not one"
-      if (t >= 1101 && t <= 1505) return 2100; // Tamil: "இருநூற்று ஒன்று"
-      return 2000;
+      if (t >= 101 && t <= 505) return 1500;   // English room numbers: "two not one" (~1.3s to 1.5s)
+      if (t >= 1101 && t <= 1505) return 2000; // Tamil room numbers: "இருநூற்று ஒன்று" (~1.7s to 2.0s)
+      return 1500;
   }
 }
 
