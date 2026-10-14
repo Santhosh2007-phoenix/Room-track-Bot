@@ -31,9 +31,10 @@ services:
       - key: ADMIN_PASSWORD
         value: admin123
 
-  # Frontend Static Site (Always Free on Render)
-  - type: static
+  # Frontend Static Site
+  - type: web
     name: room-track-bot-frontend
+    runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
