@@ -151,7 +151,10 @@ unsigned long getTrackDuration(uint16_t t) {
     case 68: return 1464;
     case 69: return 1296;
 
-    default: return 2000;
+    default:
+      if (t >= 101 && t <= 505) return 1600;   // English: "Two not one"
+      if (t >= 1101 && t <= 1505) return 2100; // Tamil: "இருநூற்று ஒன்று"
+      return 2000;
   }
 }
 
@@ -188,19 +191,28 @@ int floorIndex(String floor) {
 
 void announceLocation(String floor, String room) {
   int f = floorIndex(floor);
+  int roomNum = room.toInt();
 
-  // 1. English
+  // 1. English: Second Floor, Room Number, Two not one
   playTrack(10 + f);
   playTrack(20);
-  for (size_t i = 0; i < room.length(); i++) {
-    if (isDigit(room[i])) playTrack(digitTrack(room[i], false));
+  if (roomNum >= 101 && roomNum <= 505) {
+    playTrack(roomNum); // Plays e.g. 0201.mp3
+  } else {
+    for (size_t i = 0; i < room.length(); i++) {
+      if (isDigit(room[i])) playTrack(digitTrack(room[i], false));
+    }
   }
 
-  // 2. Tamil
+  // 2. Tamil: இரண்டாம் தளம், அறை எண், இருநூற்று ஒன்று
   playTrack(30 + f);
   playTrack(40);
-  for (size_t i = 0; i < room.length(); i++) {
-    if (isDigit(room[i])) playTrack(digitTrack(room[i], true));
+  if (roomNum >= 101 && roomNum <= 505) {
+    playTrack(1000 + roomNum); // Plays e.g. 1201.mp3
+  } else {
+    for (size_t i = 0; i < room.length(); i++) {
+      if (isDigit(room[i])) playTrack(digitTrack(room[i], true));
+    }
   }
 }
 
