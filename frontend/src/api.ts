@@ -10,7 +10,15 @@ export async function api<T=any>(path:string, options:RequestInit={}) : Promise<
   if(getToken())headers.Authorization=`Bearer ${getToken()}`;
   const res=await fetch(`${BASE}${path}`,{...options,headers});
   const data=await res.json().catch(()=>({error:'Unexpected server response'}));
-  if(!res.ok)throw new Error(data.error||`Request failed (${res.status})`);
+  if(!res.ok){
+    if(res.status===401){
+      clearToken();
+      if(!window.location.pathname.startsWith('/visitor')){
+        window.location.href='/';
+      }
+    }
+    throw new Error(data.error||`Request failed (${res.status})`);
+  }
   return data as T;
 }
 export const csvDownload=(rows:any[], filename:string)=>{

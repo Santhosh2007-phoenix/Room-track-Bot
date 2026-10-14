@@ -49,7 +49,7 @@ function App(){
     api<any>('/dashboard/stats'),api<any>('/reports'),api<any>('/esp32/status'),api<any>('/settings')
    ]);
    setPatients(p.items);setRooms(r);setFloors(f);setStats(s);setReports(rep);setDevice(d);setSettings(st);
-  }catch(e:any){setError(e.message||'Unable to connect to database');if(String(e.message).includes('log in')||String(e.message).includes('Authentication')){clearToken();setTokenState('');}}
+  }catch(e:any){setError(e.message||'Unable to connect to database');if(/session|expired|log in|authentication|401/i.test(String(e.message))){clearToken();setTokenState('');}}
   finally{setLoading(false)}
  }
  useEffect(()=>{if(tokenState)loadAll()},[tokenState]);

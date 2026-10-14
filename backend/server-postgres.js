@@ -55,7 +55,7 @@ app.get('/api/health',(req,res)=>res.json({ok:true,service:'Room Track Bot API',
 app.post('/api/auth/login',[body('username').trim().notEmpty(),body('password').isString().notEmpty()],validate,asyncRoute(async(req,res)=>{
  const r=await q('SELECT * FROM admins WHERE LOWER(username)=LOWER($1)',[req.body.username]);const admin=r.rows[0];
  if(!admin || !(await bcrypt.compare(req.body.password,admin.password_hash)))return res.status(401).json({error:'Invalid username or password'});
- const token=jwt.sign({id:admin.id,username:admin.username},JWT_SECRET,{expiresIn:'8h'});res.json({token,user:{id:admin.id,username:admin.username}});
+ const token=jwt.sign({id:admin.id,username:admin.username},JWT_SECRET,{expiresIn:'30d'});res.json({token,user:{id:admin.id,username:admin.username}});
 }));
 app.get('/api/auth/me',adminOnly,(req,res)=>res.json({user:req.admin}));
 // Public visitor routes return only name, floor and room.
