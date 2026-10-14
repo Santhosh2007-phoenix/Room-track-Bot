@@ -131,9 +131,71 @@ unsigned long getTrackDuration(uint16_t t) {
 
     case 40: return 1128; // Arai En Tamil
 
+    // English Room Numbers (101 - 505)
+    case 101: return 1344;
+    case 102: return 1296;
+    case 103: return 1368;
+    case 104: return 1392;
+    case 105: return 1416;
+
+    case 201: return 1296;
+    case 202: return 1272;
+    case 203: return 1344;
+    case 204: return 1344;
+    case 205: return 1368;
+
+    case 301: return 1392;
+    case 302: return 1368;
+    case 303: return 1440;
+    case 304: return 1440;
+    case 305: return 1488;
+
+    case 401: return 1440;
+    case 402: return 1416;
+    case 403: return 1488;
+    case 404: return 1488;
+    case 405: return 1536;
+
+    case 501: return 1512;
+    case 502: return 1464;
+    case 503: return 1536;
+    case 504: return 1536;
+    case 505: return 1560;
+
+    // Tamil Room Numbers (1101 - 1505)
+    case 1101: return 1584;
+    case 1102: return 1800;
+    case 1103: return 1800;
+    case 1104: return 1848;
+    case 1105: return 1824;
+
+    case 1201: return 1776;
+    case 1202: return 1992;
+    case 1203: return 1944;
+    case 1204: return 1968;
+    case 1205: return 2016;
+
+    case 1301: return 1728;
+    case 1302: return 1920;
+    case 1303: return 1896;
+    case 1304: return 1920;
+    case 1305: return 1920;
+
+    case 1401: return 1824;
+    case 1402: return 2016;
+    case 1403: return 1992;
+    case 1404: return 2040;
+    case 1405: return 2040;
+
+    case 1501: return 1776;
+    case 1502: return 1920;
+    case 1503: return 1920;
+    case 1504: return 1968;
+    case 1505: return 1944;
+
     default:
-      if (t >= 101 && t <= 505) return 1500;   // English room numbers: "two not one" (~1.3s to 1.5s)
-      if (t >= 1101 && t <= 1505) return 2000; // Tamil room numbers: "இருநூற்று ஒன்று" (~1.7s to 2.0s)
+      if (t >= 101 && t <= 505) return 1500;
+      if (t >= 1101 && t <= 1505) return 2000;
       return 1500;
   }
 }
