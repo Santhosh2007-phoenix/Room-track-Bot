@@ -119,13 +119,15 @@ unsigned long getTrackDuration(uint16_t t) {
     case 11: return 1728;
     case 12: return 1848;
     case 13: return 1968;
+    case 14: return 1968; // 5th Floor English
 
-    case 20: return 1728;
+    case 20: return 1728; // Room Number English
 
     case 30: return 1608;
     case 31: return 1848;
     case 32: return 1848;
     case 33: return 1704;
+    case 34: return 1800; // 5th Floor Tamil
 
     case 40: return 1368;
 
@@ -186,6 +188,7 @@ int floorIndex(String floor) {
   if (floor == "2F") return 1;
   if (floor == "3F") return 2;
   if (floor == "4F") return 3;
+  if (floor == "5F") return 4;
   return 0;
 }
 
