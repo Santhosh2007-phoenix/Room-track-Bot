@@ -1,27 +1,27 @@
 /*
   =============================================================================
-  ROOM TRACK BOT - Complete ESP32 Firmware (Local High-Speed Setup)
+  ROOM TRACK BOT - Complete ESP32 Firmware (Cloud Setup - No Laptop Required)
   =============================================================================
   Features:
   1. PERSON DETECTION:
-     - Ultrasonic sensor detects person (< 40cm) continuously for 2 FULL SECONDS.
+     - Ultrasonic sensor detects person (< 40cm) continuously for 500ms.
      - LCD displays "Person Detected", then "Welcome! Send Name on BT" + voice greeting.
   2. BLUETOOTH TERMINAL SEARCH:
      - Connect via "Serial Bluetooth Terminal" app to "Room_Track_Bot".
-     - Type patient name -> searches Supabase database instantly via local proxy!
+     - Type patient name -> searches Supabase database instantly via Cloud URL!
      - Found: Displays on LCD + Speaks Floor & Room (English & Tamil) for 3s.
      - Displays "Thank You!" and "Next person soon" for 3s.
      - Not Found: Displays "Patient Not Found", allows another name.
   3. WEBSITE VISITOR SYNC:
      - When someone clicks "SEND TO ROOM TRACK BOT" on phone website,
-       ESP32 receives it within 2 seconds, shows on LCD, and announces in voice!
-  4. ZERO SSL/TIMEOUT ISSUES:
-     - Uses standard HTTP to Port 5173 Proxy -> Zero SSL overhead, instant 10ms response!
+       ESP32 receives it, shows on LCD, and announces in voice!
+  4. DIRECT CLOUD BACKEND:
+     - Connects directly to Render Cloud Backend -> No laptop needed, works anywhere!
 
   Pin Setup:
   - LCD I2C: SDA -> GPIO 21, SCL -> GPIO 22 (Address: 0x27)
   - Ultrasonic: TRIG -> GPIO 5, ECHO -> GPIO 18 (via voltage divider)
-  - DFPlayer Mini: RX -> GPIO 17, TX -> GPIO 16 (via 1k resistor)
+  - DFPlayer Mini: RX -> GPIO 16, TX -> GPIO 17 (via 1k resistor)
   - Bluetooth: Built-in ESP32 (Name: "Room_Track_Bot")
   - GND: Common Ground
   =============================================================================
@@ -54,15 +54,15 @@ const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 // ======================== PIN ASSIGNMENTS ========================
 static const int TRIG_PIN  = 5;
 static const int ECHO_PIN  = 18;
-static const int DF_RX_PIN = 17; // ESP32 RX (connect to DFPlayer TX)
-static const int DF_TX_PIN = 16; // ESP32 TX (connect to DFPlayer RX via 1k resistor)
+static const int DF_RX_PIN = 16; // ESP32 RX (connect to DFPlayer TX)
+static const int DF_TX_PIN = 17; // ESP32 TX (connect to DFPlayer RX via 1k resistor)
 
 static const uint8_t LCD_ADDR = 0x27;
-static const int DF_VOLUME = 30; // Max volume (0 to 30)
+static const int DF_VOLUME = 20; // Max volume (0 to 30)
 
 // Workflow Timing Constants
-static const unsigned long POLL_INTERVAL_MS      = 3000;  // Poll website every 3s
-static const unsigned long HEARTBEAT_INTERVAL_MS = 15000; // Heartbeat every 15s
+static const unsigned long POLL_INTERVAL_MS      = 2000;  // Poll website every 2s
+static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;  // Heartbeat every 5s
 static const unsigned long IDLE_TIMEOUT_MS       = 20000; // Idle reset after 20s
 static const unsigned long COOLDOWN_DURATION_MS  = 5000;  // 5-second cooldown
 static const unsigned long HTTP_TIMEOUT_MS       = 8000;  // 8s timeout for cloud SSL
@@ -109,13 +109,68 @@ void setStandbyScreen() {
   lastActivityTime = millis();
 }
 
-void playTrack(uint16_t t) {
-  Serial.printf(">>> Playing Track: %d (Player Ready: %s)\n", t, playerReady ? "YES" : "NO");
-  if (playerReady) {
-    player.play(t);          // Plays root /0001.mp3
-    player.playMp3Folder(t); // Plays /MP3/0001.mp3
-    delay(900);
+unsigned long getTrackDuration(uint16_t t) {
+  switch (t) {
+    case 1:  return 4824;
+    case 2:  return 4608;
+    case 5:  return 2688;
+    case 7:  return 5088;
+
+    case 10: return 1488;
+    case 11: return 1728;
+    case 12: return 1848;
+    case 13: return 1968;
+
+    case 20: return 1728;
+
+    case 30: return 1608;
+    case 31: return 1848;
+    case 32: return 1848;
+    case 33: return 1704;
+
+    case 40: return 1368;
+
+    case 50: return 1608;
+    case 51: return 1248;
+    case 52: return 1104;
+    case 53: return 1248;
+    case 54: return 1416;
+    case 55: return 1416;
+    case 56: return 1368;
+    case 57: return 1344;
+    case 58: return 1968;
+    case 59: return 1248;
+
+    case 60: return 1464;
+    case 61: return 1368;
+    case 62: return 1296;
+    case 63: return 1224;
+    case 64: return 1368;
+    case 65: return 1224;
+    case 66: return 1128;
+    case 67: return 1416;
+    case 68: return 1464;
+    case 69: return 1296;
+
+    default: return 2000;
   }
+}
+
+void playTrack(uint16_t t) {
+  if (!playerReady) {
+    Serial.println("ERROR: DFPlayer not ready!");
+    return;
+  }
+
+  unsigned long duration = getTrackDuration(t);
+
+  Serial.printf("Playing track %04d for %lu ms\n",
+                t, duration);
+
+  player.playMp3Folder(t);
+
+  // Wait until the audio duration plus 200 ms safety margin
+  delay(duration + 200);
 }
 
 int digitTrack(char c, bool tamil) {
@@ -315,7 +370,7 @@ void connectWiFi() {
   }
 }
 
-// Heartbeat every 15s
+// Heartbeat every 5s
 void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
   WiFiClientSecure client;
@@ -332,7 +387,7 @@ void sendHeartbeat() {
   }
 }
 
-// Poll website visitor dispatch every 3s
+// Poll website visitor dispatch every 2s
 void pollWebsiteDispatch() {
   if (WiFi.status() != WL_CONNECTED) return;
   WiFiClientSecure client;
@@ -392,64 +447,75 @@ void setup() {
 }
 
 void loop() {
-  ensureWiFiConnected();
-
   unsigned long currentMillis = millis();
 
-  // Poll website every 2s
-  if (currentMillis - lastPoll >= POLL_INTERVAL_MS) {
-    lastPoll = currentMillis;
-    pollWebsiteDispatch();
+  // 1. Check ultrasonic sensor first
+  if (currentMillis >= cooldownEndTime) {
+    long distance = getDistanceCm();
+
+    if (distance > 0 && distance < 40) {
+      if (currentState == STATE_STANDBY) {
+        currentState = STATE_CONFIRMING_PERSON;
+        personDetectionStart = millis();
+        lastActivityTime = millis();
+
+        showLCD("Person Detected", "Please Wait...");
+        Serial.println("Person detected. Confirming...");
+      }
+      else if (currentState == STATE_CONFIRMING_PERSON) {
+        if (currentMillis - personDetectionStart >= 500) {
+          currentState = STATE_AWAITING_INPUT;
+          lastActivityTime = millis();
+
+          showLCD("Welcome!", "Send Name on BT");
+
+          SerialBT.println(
+            "Welcome to Room Track Bot. Please type person name:"
+          );
+
+          playTrack(1);
+          playTrack(2);
+        }
+      }
+    }
+    else if (currentState == STATE_CONFIRMING_PERSON) {
+      setStandbyScreen();
+    }
   }
 
-  // Heartbeat every 5s
-  if (currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
-    lastHeartbeat = currentMillis;
-    sendHeartbeat();
+  // 2. Wi-Fi reconnect only when disconnected
+  if (WiFi.status() != WL_CONNECTED) {
+    ensureWiFiConnected();
   }
 
-  // Bluetooth input
+  // 3. Website polling and heartbeat during standby only
+  if (currentState == STATE_STANDBY) {
+    if (millis() - lastPoll >= POLL_INTERVAL_MS) {
+      lastPoll = millis();
+      pollWebsiteDispatch();
+    }
+
+    if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
+      lastHeartbeat = millis();
+      sendHeartbeat();
+    }
+  }
+
+  // 4. Bluetooth name input
   if (SerialBT.available()) {
     String incomingName = SerialBT.readStringUntil('\n');
     incomingName.trim();
+
     if (incomingName.length() > 0) {
       searchPatient(incomingName);
     }
   }
 
-  // 20s Idle timeout reset
-  if (currentState != STATE_STANDBY && (currentMillis - lastActivityTime >= IDLE_TIMEOUT_MS)) {
-    Serial.println("Idle timeout (20s): Restoring standby.");
+  // 5. Idle timeout
+  if (currentState != STATE_STANDBY &&
+      millis() - lastActivityTime >= IDLE_TIMEOUT_MS) {
+    Serial.println("Idle timeout: Returning to standby.");
     setStandbyScreen();
-  }
-
-  // HC-SR04 Detection
-  if (currentMillis > cooldownEndTime) {
-    long distance = getDistanceCm();
-
-    if (distance >= 2 && distance < 40) {
-      if (currentState == STATE_STANDBY) {
-        currentState = STATE_CONFIRMING_PERSON;
-        personDetectionStart = currentMillis;
-        lastActivityTime = currentMillis;
-        showLCD("Person Detected", "Please Wait...");
-        Serial.printf("Person detected at %ld cm. Confirming for 2s...\n", distance);
-      } else if (currentState == STATE_CONFIRMING_PERSON) {
-        if (currentMillis - personDetectionStart >= 2000) {
-          currentState = STATE_AWAITING_INPUT;
-          lastActivityTime = currentMillis;
-          showLCD("Welcome!", "Send Name on BT");
-          SerialBT.println("Hello! Welcome to Room Track Bot. Please type patient name to search:");
-
-          playTrack(1); // 0001.mp3: Welcome English
-          playTrack(2); // 0002.mp3: Welcome Tamil
-        }
-      }
-    } else {
-      if (currentState == STATE_CONFIRMING_PERSON) {
-        setStandbyScreen();
-      }
-    }
   }
 
   delay(25);
