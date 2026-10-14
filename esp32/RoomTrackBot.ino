@@ -336,7 +336,6 @@ void searchPatient(String patientName) {
     bool begun = false;
     if (url.startsWith("https://")) {
       secureClient.setInsecure();
-      secureClient.setBufferSizes(1024, 1024);
       begun = http.begin(secureClient, url);
     } else {
       begun = http.begin(client, url);
@@ -446,7 +445,6 @@ void sendHeartbeat() {
   bool begun = false;
   if (url.startsWith("https://")) {
     secureClient.setInsecure();
-    secureClient.setBufferSizes(1024, 1024);
     begun = h.begin(secureClient, url);
   } else {
     begun = h.begin(client, url);
@@ -473,7 +471,6 @@ void pollWebsiteDispatch() {
   bool begun = false;
   if (url.startsWith("https://")) {
     secureClient.setInsecure();
-    secureClient.setBufferSizes(1024, 1024);
     begun = h.begin(secureClient, url);
   } else {
     begun = h.begin(client, url);
