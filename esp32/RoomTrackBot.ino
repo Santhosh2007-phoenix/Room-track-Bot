@@ -306,7 +306,7 @@ void searchPatient(String patientName) {
             String pRoom = String((const char*)(p["room"] | ""));
 
             SerialBT.println("================================");
-            SerialBT.println(">>> PATIENT FOUND!");
+            SerialBT.println(">>> PERSON FOUND!");
             SerialBT.println("Name  : " + pName);
             SerialBT.println("Floor : " + pFloor);
             SerialBT.println("Room  : " + pRoom);
@@ -315,8 +315,8 @@ void searchPatient(String patientName) {
             handlePatientFound(p);
             return;
           } else {
-            SerialBT.println(">>> Patient '" + patientName + "' Not Found! Please send another name:");
-            showLCD("Patient Not", "Found!");
+            SerialBT.println(">>> Person '" + patientName + "' Not Found! Please send another name:");
+            showLCD("Person Not", "Found!");
             playTrack(7);
             delay(2500);
 
