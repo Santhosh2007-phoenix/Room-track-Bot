@@ -1,6 +1,6 @@
 /*
   =============================================================================
-  ROOM TRACK BOT - Complete ESP32 Firmware (Cloud Setup - No Laptop Required)
+  ROOM TRACK BOT - Complete ESP32 Firmware (High-Speed Local Proxy)
   =============================================================================
   Features:
   1. PERSON DETECTION:
@@ -8,15 +8,15 @@
      - LCD displays "Person Detected", then "Welcome! Send Name on BT" + voice greeting.
   2. BLUETOOTH TERMINAL SEARCH:
      - Connect via "Serial Bluetooth Terminal" app to "Room_Track_Bot".
-     - Type patient name -> searches Supabase database instantly via Cloud URL!
+     - Type patient name -> searches Supabase database instantly via local proxy!
      - Found: Displays on LCD + Speaks Floor & Room (English & Tamil) for 3s.
      - Displays "Thank You!" and "Next person soon" for 3s.
      - Not Found: Displays "Patient Not Found", allows another name.
   3. WEBSITE VISITOR SYNC:
      - When someone clicks "SEND TO ROOM TRACK BOT" on phone website,
        ESP32 receives it, shows on LCD, and announces in voice!
-  4. DIRECT CLOUD BACKEND:
-     - Connects directly to Render Cloud Backend -> No laptop needed, works anywhere!
+  4. ZERO SSL/RAM OVERHEAD:
+     - Uses standard HTTP to local proxy -> Zero SSL overhead, leaves full RAM for Bluetooth & Audio!
 
   Pin Setup:
   - LCD I2C: SDA -> GPIO 21, SCL -> GPIO 22 (Address: 0x27)
@@ -28,7 +28,6 @@
 */
 
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
@@ -47,8 +46,8 @@ BluetoothSerial SerialBT;
 const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
-// Direct Cloud Backend API (Zero Laptop Dependency, Works Anywhere!)
-const char* API_BASE     = "https://room-track-bot-backend.onrender.com/api";
+// High-Speed Local Proxy API (Zero SSL overhead, Instant 10ms Response)
+const char* API_BASE     = "http://10.34.106.79:5173/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
@@ -65,7 +64,7 @@ static const unsigned long POLL_INTERVAL_MS      = 2000;  // Poll website every 
 static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;  // Heartbeat every 5s
 static const unsigned long IDLE_TIMEOUT_MS       = 20000; // Idle reset after 20s
 static const unsigned long COOLDOWN_DURATION_MS  = 5000;  // 5-second cooldown
-static const unsigned long HTTP_TIMEOUT_MS       = 8000;  // 8s timeout for cloud SSL
+static const unsigned long HTTP_TIMEOUT_MS       = 3000;  // 3s timeout
 
 LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
 HardwareSerial dfSerial(2);
@@ -272,13 +271,11 @@ void searchPatient(String patientName) {
   showLCD("Searching...", patientName);
 
   if (WiFi.status() == WL_CONNECTED) {
-    WiFiClientSecure client;
-    client.setInsecure();
     HTTPClient http;
     http.setTimeout(HTTP_TIMEOUT_MS);
     String url = String(API_BASE) + "/visitor/search?name=" + urlEncode(patientName);
 
-    if (http.begin(client, url)) {
+    if (http.begin(url)) {
       int httpCode = http.GET();
       if (httpCode == 200) {
         String res = http.getString();
@@ -373,12 +370,10 @@ void connectWiFi() {
 // Heartbeat every 5s
 void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
-  WiFiClientSecure client;
-  client.setInsecure();
   HTTPClient h;
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/heartbeat";
-  if (h.begin(client, url)) {
+  if (h.begin(url)) {
     h.addHeader("Content-Type", "application/json");
     h.addHeader("X-API-Key", API_KEY);
     String b = "{\"ip_address\":\"" + WiFi.localIP().toString() + "\"}";
@@ -390,12 +385,10 @@ void sendHeartbeat() {
 // Poll website visitor dispatch every 2s
 void pollWebsiteDispatch() {
   if (WiFi.status() != WL_CONNECTED) return;
-  WiFiClientSecure client;
-  client.setInsecure();
   HTTPClient h;
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/next-patient";
-  if (!h.begin(client, url)) return;
+  if (!h.begin(url)) return;
   h.addHeader("X-API-Key", API_KEY);
 
   int code = h.GET();
