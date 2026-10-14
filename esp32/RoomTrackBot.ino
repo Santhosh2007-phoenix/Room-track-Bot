@@ -28,6 +28,7 @@
 */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
@@ -327,11 +328,21 @@ void searchPatient(String patientName) {
 
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
+    WiFiClientSecure secureClient;
     HTTPClient http;
     http.setTimeout(HTTP_TIMEOUT_MS);
     String url = String(API_BASE) + "/visitor/search?name=" + urlEncode(patientName);
 
-    if (http.begin(client, url)) {
+    bool begun = false;
+    if (url.startsWith("https://")) {
+      secureClient.setInsecure();
+      secureClient.setBufferSizes(1024, 1024);
+      begun = http.begin(secureClient, url);
+    } else {
+      begun = http.begin(client, url);
+    }
+
+    if (begun) {
       int httpCode = http.GET();
       if (httpCode == 200) {
         String res = http.getString();
@@ -427,10 +438,21 @@ void connectWiFi() {
 void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
   WiFiClient client;
+  WiFiClientSecure secureClient;
   HTTPClient h;
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/heartbeat";
-  if (h.begin(client, url)) {
+
+  bool begun = false;
+  if (url.startsWith("https://")) {
+    secureClient.setInsecure();
+    secureClient.setBufferSizes(1024, 1024);
+    begun = h.begin(secureClient, url);
+  } else {
+    begun = h.begin(client, url);
+  }
+
+  if (begun) {
     h.addHeader("Content-Type", "application/json");
     h.addHeader("X-API-Key", API_KEY);
     String b = "{\"ip_address\":\"" + WiFi.localIP().toString() + "\"}";
@@ -443,10 +465,21 @@ void sendHeartbeat() {
 void pollWebsiteDispatch() {
   if (WiFi.status() != WL_CONNECTED) return;
   WiFiClient client;
+  WiFiClientSecure secureClient;
   HTTPClient h;
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/next-patient";
-  if (!h.begin(client, url)) return;
+
+  bool begun = false;
+  if (url.startsWith("https://")) {
+    secureClient.setInsecure();
+    secureClient.setBufferSizes(1024, 1024);
+    begun = h.begin(secureClient, url);
+  } else {
+    begun = h.begin(client, url);
+  }
+
+  if (!begun) return;
   h.addHeader("X-API-Key", API_KEY);
 
   int code = h.GET();
