@@ -2,7 +2,7 @@ services:
   # Backend API Service
   - type: web
     name: room-track-bot-backend
-    env: node
+    runtime: node
     plan: free
     rootDir: backend
     buildCommand: npm install
@@ -31,11 +31,9 @@ services:
       - key: ADMIN_PASSWORD
         value: admin123
 
-  # Frontend Static Site
-  - type: web
+  # Frontend Static Site (Always Free on Render)
+  - type: static
     name: room-track-bot-frontend
-    env: static
-    plan: free
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
