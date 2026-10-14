@@ -19,7 +19,17 @@ const pool = new Pool({
   ssl: process.env.PGSSL === 'false' ? false : { rejectUnauthorized: false },
   max: Number(process.env.PG_POOL_MAX || 5),
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000
+  connectionTimeoutMillis: 10000,
+  keepAlive: true
+});
+pool.on('error', (err) => {
+  console.warn('[PG-POOL] Non-fatal idle connection error:', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.warn('[Process] Unhandled Rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.warn('[Process] Uncaught Exception:', err.message);
 });
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
@@ -30,6 +40,7 @@ if (!API_KEY || API_KEY.length < 24) throw new Error('Set API_KEY to a random de
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN ? process.env.FRONTEND_ORIGIN.split(',') : true }));
 app.use(express.json({ limit: '100kb' }));
+app.use((req, res, next) => { console.log(`[REQ] ${req.method} ${req.url} from ${req.ip}`); next(); });
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false }));
 const q = (text, params=[]) => pool.query(text, params);
 const validate = (req,res,next) => { const errors=validationResult(req); if(!errors.isEmpty()) return res.status(400).json({error:'Validation failed',details:errors.array()}); next(); };
@@ -181,7 +192,7 @@ async function bootstrap(){
  const username=process.env.ADMIN_USERNAME||'admin';const password=process.env.ADMIN_PASSWORD||'admin123';
  const existing=await q('SELECT id FROM admins WHERE LOWER(username)=LOWER($1)',[username]);if(!existing.rowCount)await q('INSERT INTO admins(username,password_hash) VALUES($1,$2)',[username,await bcrypt.hash(password,12)]);
  await q("INSERT INTO settings(key,value) VALUES('hospital_name','Room Track Hospital'),('bot_name','Room Track Bot'),('admin_username',$1) ON CONFLICT(key) DO NOTHING",[username]);
- await q('SELECT 1');app.listen(PORT,()=>console.log(`Room Track Bot API (Supabase PostgreSQL) running on port ${PORT}`));
+ await q('SELECT 1');app.listen(PORT,'0.0.0.0',()=>console.log(`Room Track Bot API (Supabase PostgreSQL) running on port ${PORT}`));
 }
  bootstrap().catch(err=>{console.error('Startup failed:',err.message);process.exit(1);});
  process.on('SIGTERM',async()=>{await pool.end();process.exit(0)});
