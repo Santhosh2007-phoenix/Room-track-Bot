@@ -28,6 +28,7 @@
 */
 
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -42,13 +43,14 @@
 #endif
 
 BluetoothSerial SerialBT;
+WiFiUDP udpDiscovery;
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
-// Direct Node.js Backend API on Port 4000 (Current Laptop Wi-Fi IP)
-const char* API_BASE     = "http://10.201.101.79:4000/api";
+// Dynamic Backend API (Auto-Discovered over UDP on Port 4001, fallback to current IP)
+String API_BASE          = "http://10.201.101.79:4000/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
@@ -392,12 +394,63 @@ void searchPatient(String patientName) {
   }
 }
 
+void discoverServerIP() {
+  Serial.println("\n[Auto-Discovery] Searching for Laptop Server on Wi-Fi...");
+  showLCD("Finding Server", "Auto-Discovery..");
+
+  udpDiscovery.begin(4002);
+
+  // Send up to 5 discovery broadcasts (1 every 300ms)
+  for (int attempt = 1; attempt <= 5; attempt++) {
+    // 1. Broadcast to 255.255.255.255
+    udpDiscovery.beginPacket(IPAddress(255, 255, 255, 255), 4001);
+    udpDiscovery.print("DISCOVER_ROOM_TRACK_BOT");
+    udpDiscovery.endPacket();
+
+    // 2. Broadcast to subnet broadcast IP
+    IPAddress bIP = WiFi.broadcastIP();
+    if (bIP) {
+      udpDiscovery.beginPacket(bIP, 4001);
+      udpDiscovery.print("DISCOVER_ROOM_TRACK_BOT");
+      udpDiscovery.endPacket();
+    }
+
+    unsigned long startWait = millis();
+    while (millis() - startWait < 300) {
+      int packetSize = udpDiscovery.parsePacket();
+      if (packetSize > 0) {
+        char buf[64];
+        int len = udpDiscovery.read(buf, sizeof(buf) - 1);
+        if (len > 0) buf[len] = '\0';
+
+        if (String(buf).indexOf("RTB_SERVER_ACK") >= 0) {
+          IPAddress sIP = udpDiscovery.remoteIP();
+          API_BASE = "http://" + sIP.toString() + ":4000/api";
+          Serial.println(">>> [Auto-Discovery SUCCESS] Found Laptop Server at: " + API_BASE);
+          showLCD("Server Found!", sIP.toString());
+          delay(1200);
+          udpDiscovery.stop();
+          return;
+        }
+      }
+      delay(10);
+    }
+    Serial.print(".");
+  }
+
+  Serial.println("\n[Auto-Discovery] Timeout: Using default IP: " + API_BASE);
+  udpDiscovery.stop();
+}
+
 void ensureWiFiConnected() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Wi-Fi disconnected. Reconnecting...");
     WiFi.disconnect();
     WiFi.reconnect();
     delay(300);
+    if (WiFi.status() == WL_CONNECTED) {
+      discoverServerIP();
+    }
   }
 }
 
@@ -425,7 +478,8 @@ void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println(">>> WiFi Connected! IP: " + WiFi.localIP().toString());
     showLCD("WiFi Connected!", WiFi.localIP().toString());
-    delay(1200);
+    delay(1000);
+    discoverServerIP();
   } else {
     Serial.println(">>> WiFi Failed to connect! Check Hotspot settings.");
     showLCD("WiFi Failed", "Check Hotspot");

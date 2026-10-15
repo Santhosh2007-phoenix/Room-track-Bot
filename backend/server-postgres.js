@@ -8,6 +8,7 @@ import jwt from 'jsonwebtoken';
 import pg from 'pg';
 import { body, query, validationResult } from 'express-validator';
 import crypto from 'node:crypto';
+import dgram from 'node:dgram';
 import multer from 'multer';
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -42,6 +43,28 @@ app.use(cors({ origin: process.env.FRONTEND_ORIGIN ? process.env.FRONTEND_ORIGIN
 app.use(express.json({ limit: '100kb' }));
 app.use((req, res, next) => { console.log(`[REQ] ${req.method} ${req.url} from ${req.ip}`); next(); });
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false }));
+
+// Auto-Discovery UDP beacon on Port 4001 for ESP32
+try {
+  const udpDiscovery = dgram.createSocket('udp4');
+  udpDiscovery.on('message', (msg, rinfo) => {
+    if (msg.toString().includes('DISCOVER_ROOM_TRACK_BOT')) {
+      const ack = Buffer.from(`RTB_SERVER_ACK:${PORT}`);
+      udpDiscovery.send(ack, rinfo.port, rinfo.address, (err) => {
+        if (!err) console.log(`[Auto-Discovery] Replied to ESP32 at ${rinfo.address}:${rinfo.port}`);
+      });
+    }
+  });
+  udpDiscovery.on('error', (err) => {
+    console.warn('[Auto-Discovery] UDP error (non-fatal):', err.message);
+  });
+  udpDiscovery.bind(4001, '0.0.0.0', () => {
+    console.log('[Auto-Discovery] UDP beacon listening on port 4001');
+  });
+} catch (e) {
+  console.warn('[Auto-Discovery] Failed to start UDP beacon:', e.message);
+}
+
 const q = (text, params=[]) => pool.query(text, params);
 const validate = (req,res,next) => { const errors=validationResult(req); if(!errors.isEmpty()) return res.status(400).json({error:'Validation failed',details:errors.array()}); next(); };
 const asyncRoute = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
