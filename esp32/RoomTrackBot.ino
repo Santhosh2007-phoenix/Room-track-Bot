@@ -264,11 +264,13 @@ void announceLocation(String floor, String room) {
 
 // Handle Patient Found
 void handlePatientFound(JsonObject p) {
-  String name  = String((const char*)(p["name"]  | "PATIENT"));
-  String floor = String((const char*)(p["floor"] | ""));
-  String room  = String((const char*)(p["room"]  | ""));
+  String name   = String((const char*)(p["name"]        | "PATIENT"));
+  String floor  = String((const char*)(p["floor"]       | ""));
+  String room   = String((const char*)(p["room"]        | ""));
+  String father = String((const char*)(p["father_name"] | ""));
+  String city   = String((const char*)(p["city"]        | ""));
 
-  Serial.println(">>> Patient Found: " + name + " | Floor: " + floor + " | Room: " + room);
+  Serial.println(">>> Patient Found: " + name + (father.length() > 0 ? " (S/O " + father + ")" : "") + (city.length() > 0 ? " [" + city + "]" : "") + " | Floor: " + floor + " | Room: " + room);
   
   // Show result for 3 seconds
   showLCD(name, floor + " Room:" + room);
@@ -356,13 +358,37 @@ void searchPatient(String patientName) {
             String pName = String((const char*)(p["name"] | ""));
             String pFloor = String((const char*)(p["floor"] | ""));
             String pRoom = String((const char*)(p["room"] | ""));
+            String pFather = String((const char*)(p["father_name"] | ""));
+            String pCity = String((const char*)(p["city"] | ""));
 
-            SerialBT.println("================================");
-            SerialBT.println(">>> PERSON FOUND!");
-            SerialBT.println("Name  : " + pName);
-            SerialBT.println("Floor : " + pFloor);
-            SerialBT.println("Room  : " + pRoom);
-            SerialBT.println("================================");
+            if (doc["patients"].is<JsonArray>() && doc["patients"].as<JsonArray>().size() > 1) {
+              JsonArray pts = doc["patients"].as<JsonArray>();
+              SerialBT.println("================================");
+              SerialBT.println(">>> " + String(pts.size()) + " MATCHES FOUND:");
+              for (size_t i = 0; i < pts.size(); i++) {
+                JsonObject item = pts[i].as<JsonObject>();
+                String itName = String((const char*)(item["name"] | ""));
+                String itFather = String((const char*)(item["father_name"] | ""));
+                String itCity = String((const char*)(item["city"] | ""));
+                String itFloor = String((const char*)(item["floor"] | ""));
+                String itRoom = String((const char*)(item["room"] | ""));
+                String line = String(i + 1) + ". " + itName;
+                if (itFather.length() > 0) line += " (S/O " + itFather + ")";
+                if (itCity.length() > 0) line += " [" + itCity + "]";
+                line += " -> " + itFloor + " Room " + itRoom;
+                SerialBT.println(line);
+              }
+              SerialBT.println("================================");
+            } else {
+              SerialBT.println("================================");
+              SerialBT.println(">>> PERSON FOUND!");
+              SerialBT.println("Name         : " + pName);
+              if (pFather.length() > 0) SerialBT.println("Father/Spouse: " + pFather);
+              if (pCity.length() > 0)   SerialBT.println("City/Village : " + pCity);
+              SerialBT.println("Floor        : " + pFloor);
+              SerialBT.println("Room         : " + pRoom);
+              SerialBT.println("================================");
+            }
 
             handlePatientFound(p);
             return;
