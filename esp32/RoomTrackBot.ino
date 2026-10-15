@@ -47,8 +47,8 @@ BluetoothSerial SerialBT;
 const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
 
-// Direct Node.js Backend API on Port 4000 (Instant 10ms Response - 100% Reliable)
-const char* API_BASE     = "http://10.34.106.79:4000/api";
+// Direct Node.js Backend API on Port 4000 (Current Laptop Wi-Fi IP)
+const char* API_BASE     = "http://10.201.101.79:4000/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
