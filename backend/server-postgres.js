@@ -71,7 +71,7 @@ app.post('/api/auth/login',[body('username').trim().notEmpty(),body('password').
 app.get('/api/auth/me',adminOnly,(req,res)=>res.json({user:req.admin}));
 // Public visitor routes return only name, floor and room.
 app.get('/api/visitor/search',rateLimit({windowMs:60000,limit:40}),asyncRoute(async(req,res)=>{
- const name=String(req.query.name||'').trim().replace(/\s+/g,' ');if(!name||name.length>100)return res.status(400).json({success:false,message:'Enter a valid patient name'});
+ const name=String(req.query.name||'').replace(/\0/g,'').trim().replace(/\s+/g,' ');if(!name||name.length>100)return res.status(400).json({success:false,message:'Enter a valid patient name'});
  const r=await q("SELECT id,COALESCE(patient_id,patient_code) AS patient_id,COALESCE(name,patient_name) AS name,floor,room,room_id FROM patients WHERE (LOWER(COALESCE(name,patient_name))=LOWER($1) OR LOWER(COALESCE(patient_id,patient_code))=LOWER($1)) AND status='Admitted' AND deleted_at IS NULL LIMIT 1",[name]);const p=r.rows[0];
  await q('INSERT INTO search_history(searched_name,result,floor,room,searched_at) VALUES($1,$2,$3,$4,NOW())',[name,p?'FOUND':'NOT FOUND',p?.floor||null,p?.room||null]);
  if(!p)return res.json({success:true,found:false,message:'Patient not found'});res.json({success:true,found:true,patient:publicPatient(p)});
