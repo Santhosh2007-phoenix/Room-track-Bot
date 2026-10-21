@@ -102,7 +102,7 @@ app.get('/api/visitor/search',rateLimit({windowMs:60000,limit:40}),asyncRoute(as
  res.json({success:true,found:true,count:rows.length,patients:rows.map(publicPatient),patient:publicPatient(p)});
 }));
 app.post('/api/visitor/dispatch',rateLimit({windowMs:60000,limit:30}),asyncRoute(async(req,res)=>{
- const id=String(req.body?.id||'').trim();if(!id||id.length>30)return res.status(400).json({success:false,message:'Select a patient first'});
+ const id=String(req.body?.id||'').trim();if(!id||id.length>100)return res.status(400).json({success:false,message:'Select a patient first'});
  const r=await q("SELECT id,COALESCE(patient_id,patient_code) AS patient_id,COALESCE(name,patient_name) AS name,floor,room,room_id,COALESCE(father_name,'') AS father_name,COALESCE(city,'') AS city FROM patients WHERE (LOWER(COALESCE(patient_id,patient_code))=LOWER($1) OR id::text=$1) AND status='Admitted' AND deleted_at IS NULL",[id]);const p=r.rows[0];
  if(!p)return res.status(404).json({success:false,message:'Patient is no longer available. Please search again.'});
  await q('INSERT INTO dispatch_queue(patient_id,name,floor,room,father_name,city) VALUES($1,$2,$3,$4,$5,$6)',[p.patient_id,p.name,p.floor,p.room,p.father_name,p.city]);
