@@ -46,11 +46,11 @@ BluetoothSerial SerialBT;
 WiFiUDP udpDiscovery;
 
 // ======================== WI-FI CONFIGURATION ========================
-const char* WIFI_SSID     = "Santhosh";       // Your Hotspot SSID
-const char* WIFI_PASSWORD = "0987654321";   // Your Hotspot Password
+const char* WIFI_SSID     = "Santhosh 14";    // Hotspot SSID
+const char* WIFI_PASSWORD = "0987654321";   // Hotspot Password
 
 // Dynamic Backend API (Auto-Discovered over UDP on Port 4001, fallback to current IP)
-String API_BASE          = "http://10.201.101.79:4000/api";
+String API_BASE          = "http://10.63.11.79:4000/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
