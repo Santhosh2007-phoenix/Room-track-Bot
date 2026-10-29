@@ -397,7 +397,14 @@ void recordAndSearchVoice() {
     client.setTimeout(HTTP_TIMEOUT_MS / 1000);
 
     Serial.printf("Connecting to %s:%d to send voice audio...\n", host.c_str(), port);
-    if (client.connect(host.c_str(), port)) {
+    IPAddress srvIp;
+    bool connected = false;
+    if (srvIp.fromString(host)) {
+      connected = client.connect(srvIp, port);
+    } else {
+      connected = client.connect(host.c_str(), port);
+    }
+    if (connected) {
       String boundary = "----ESP32Boundary" + String(millis());
       String head = "--" + boundary + "\r\n" +
                     "Content-Disposition: form-data; name=\"audio\"; filename=\"audio.wav\"\r\n" +
