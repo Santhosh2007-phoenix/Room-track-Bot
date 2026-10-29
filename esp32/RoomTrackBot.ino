@@ -351,7 +351,11 @@ void recordAndSearchVoice() {
     return;
   }
 
-  showLCD("Please Speak...", "Listening (3s)");
+  showLCD("Get Ready...", "3, 2, 1...");
+  delay(800);
+  i2s_zero_dma_buffer(I2S_PORT);
+
+  showLCD("Speak Name Now!", ">>> LISTENING <<<");
   Serial.println("\n[Voice Recording] Listening for 3 seconds...");
 
   // Allocate audio buffer for 16-bit PCM samples
@@ -364,26 +368,51 @@ void recordAndSearchVoice() {
     return;
   }
 
-  // Record stereo samples from INMP441, select active channel and apply volume boost
+  // Record stereo samples from INMP441, lock to active channel and remove DC offset
   size_t bytesRead = 0;
   int samplesRecorded = 0;
   const int CHUNK_SAMPLES = 256;
   int32_t chunk32[CHUNK_SAMPLES];
   int32_t peakVolume = 0;
 
+  // Calibrate & lock active channel once (INMP441 with L/R tied to GND outputs on Left channel)
+  int activeChannel = 0; // 0 = Left (chunk32[i]), 1 = Right (chunk32[i+1])
+  int64_t leftEnergy = 0;
+  int64_t rightEnergy = 0;
+
+  i2s_read(I2S_PORT, chunk32, CHUNK_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
+  int calSamples = bytesRead / sizeof(int32_t);
+  for (int i = 0; i < calSamples - 1; i += 2) {
+    int32_t l = chunk32[i] >> 14;
+    int32_t r = chunk32[i + 1] >> 14;
+    leftEnergy += (int64_t)l * l;
+    rightEnergy += (int64_t)r * r;
+  }
+  if (rightEnergy > leftEnergy * 2) {
+    activeChannel = 1;
+  } else {
+    activeChannel = 0;
+  }
+  Serial.printf("[INMP441] Locked to %s channel (L-Energy: %lld, R-Energy: %lld)\n",
+    activeChannel == 0 ? "LEFT" : "RIGHT", leftEnergy, rightEnergy);
+
+  int32_t dcAvg = 0;
   unsigned long recordStart = millis();
   while (samplesRecorded < NUM_SAMPLES) {
     i2s_read(I2S_PORT, chunk32, CHUNK_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
     int readSamples = bytesRead / sizeof(int32_t);
 
     for (int i = 0; i < readSamples - 1 && samplesRecorded < NUM_SAMPLES; i += 2) {
-      int32_t left = chunk32[i];
-      int32_t right = chunk32[i + 1];
-      // Auto-detect which channel has audio (whether L/R is GND, 3.3V, or floating)
-      int32_t active = (abs(left) > abs(right)) ? left : right;
+      int32_t raw = (activeChannel == 0) ? chunk32[i] : chunk32[i + 1];
 
-      // Shift by 12 with saturation clamping for clear audible volume
-      int32_t scaled = active >> 12;
+      // Remove DC offset using running average
+      dcAvg += (raw - dcAvg) >> 5;
+      int32_t centered = raw - dcAvg;
+
+      // Scale 24-bit audio to 16-bit PCM with clear gain for speech
+      // INMP441 is MSB aligned in 32-bit slot (bits 31..8).
+      // >> 13 provides +18dB boost without clipping for speaking distance of 15-30cm
+      int32_t scaled = centered >> 13;
       if (scaled > 32767) scaled = 32767;
       if (scaled < -32768) scaled = -32768;
 
@@ -489,7 +518,11 @@ void recordAndSearchVoice() {
         } else {
           String heard = String((const char*)(doc["transcribed_name"] | ""));
           Serial.println("Whisper Understood: '" + heard + "' - Patient Not Found");
-          showLCD("Patient Not", "Found!");
+          if (heard.length() > 0) {
+            showLCD("Heard: " + heard.substring(0, 9), "Patient Not Found");
+          } else {
+            showLCD("Patient Not", "Found!");
+          }
           playTrack(7); // Track 0007.mp3: Not found
           delay(2500);
         }

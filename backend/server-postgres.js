@@ -88,6 +88,34 @@ const normalizePhonetic = str => String(str || '').toLowerCase()
   .replace(/ee/g, 'i')
   .replace(/oo/g, 'u');
 
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const d = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) d[i][0] = i;
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+    }
+  }
+  return d[m][n];
+}
+
+function stringSimilarity(s1, s2) {
+  if (!s1 || !s2) return 0;
+  s1 = s1.toLowerCase().trim();
+  s2 = s2.toLowerCase().trim();
+  if (s1 === s2) return 1.0;
+  if (s1.startsWith(s2) || s2.startsWith(s1)) return 0.9;
+  const longer = s1.length > s2.length ? s1 : s2;
+  const shorter = s1.length > s2.length ? s2 : s1;
+  return Math.max(0, (longer.length - levenshtein(longer, shorter)) / parseFloat(longer.length));
+}
+
 const searchAdmittedPatients = async (queryText) => {
   const terms = extractSearchTerms(queryText);
   if (!terms.length) return [];
@@ -126,7 +154,12 @@ const searchAdmittedPatients = async (queryText) => {
     created_at DESC LIMIT 10`;
 
   let rows = (await q(sql, params)).rows;
-  if (rows.length > 0) return rows;
+  // If top row matches the name directly, return it
+  if (rows.length > 0) {
+    const topName = (rows[0].name || '').toLowerCase();
+    const hasNameMatch = terms.some(t => topName.includes(t) || t.includes(topName) || stringSimilarity(t, topName) >= 0.7);
+    if (hasNameMatch) return rows;
+  }
 
   // 2. Phonetic Fallback (e.g. 'Santosh' -> 'SANTHOSH', 'Ramaswamy' -> 'RAMASAMY')
   let phonSql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
@@ -137,7 +170,46 @@ const searchAdmittedPatients = async (queryText) => {
     phonSql += " AND REPLACE(REPLACE(REPLACE(REPLACE(LOWER(CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''), COALESCE(city,''), COALESCE(patient_id,patient_code))), 'th', 't'), 'sw', 's'), 'sh', 's'), 'aa', 'a') LIKE $" + phonParams.length;
   });
   phonSql += " ORDER BY created_at DESC LIMIT 10";
-  return (await q(phonSql, phonParams)).rows;
+  let phonRows = (await q(phonSql, phonParams)).rows;
+  if (phonRows.length > 0) return phonRows;
+
+  // 3. Fuzzy Levenshtein & Similarity Matching across all admitted patients
+  const allPatients = (await q("SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL")).rows;
+  
+  let bestScore = -1;
+  let bestPatient = null;
+
+  for (const p of allPatients) {
+    const pName = (p.name || '').toLowerCase();
+    const pFather = (p.father_name || '').toLowerCase();
+    const pCity = (p.city || '').toLowerCase();
+
+    let maxNameScore = 0;
+    for (const t of terms) {
+      maxNameScore = Math.max(maxNameScore, stringSimilarity(t, pName));
+    }
+
+    let fatherScore = 0;
+    let cityScore = 0;
+    for (const t of terms) {
+      if (pFather) fatherScore = Math.max(fatherScore, stringSimilarity(t, pFather));
+      if (pCity) cityScore = Math.max(cityScore, stringSimilarity(t, pCity));
+    }
+
+    let totalScore = maxNameScore * 4.0;
+    if (terms.length > 1) {
+      if (fatherScore > 0.6) totalScore += fatherScore * 1.5;
+      if (cityScore > 0.6) totalScore += cityScore * 1.5;
+    }
+
+    if (totalScore > bestScore && maxNameScore >= 0.55) {
+      bestScore = totalScore;
+      bestPatient = p;
+    }
+  }
+
+  if (bestPatient) return [bestPatient];
+  return rows.length > 0 ? rows : [];
 };
 
 const adminOnly = asyncRoute(async(req,res,next)=>{
@@ -193,6 +265,12 @@ app.post('/api/device/heartbeat',deviceOnly,asyncRoute(async(req,res)=>{const ip
 app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRoute(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
 
+  // Save the latest received audio for audio inspection/debugging
+  try {
+    const fs = await import('node:fs');
+    fs.writeFileSync('last_received_voice.wav', req.file.buffer);
+  } catch (_) {}
+
   // Fallback API keys: users can set these in .env
   const STT_API_KEY = process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
   if (!STT_API_KEY) return res.status(500).json({ error: 'STT API key (GROQ_API_KEY or OPENAI_API_KEY) not configured in .env' });
@@ -201,6 +279,17 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     const isGroq = !!process.env.GROQ_API_KEY;
     const apiUrl = isGroq ? 'https://api.groq.com/openai/v1/audio/transcriptions' : 'https://api.openai.com/v1/audio/transcriptions';
     
+    // Dynamically build a custom vocabulary prompt containing all active admitted patients
+    const allAdmitted = (await q("SELECT DISTINCT COALESCE(name,patient_name) AS name, COALESCE(father_name,'') AS father, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL")).rows;
+    const nameSet = new Set();
+    const detailSet = new Set();
+    allAdmitted.forEach(p => {
+      if (p.name) nameSet.add(p.name);
+      if (p.father) detailSet.add(p.father);
+      if (p.city) detailSet.add(p.city);
+    });
+    const promptText = `Hospital admitted patients: ${[...nameSet].join(', ')}. Details: ${[...detailSet].join(', ')}.`;
+
     // Create FormData for the file upload (using native fetch)
     const formData = new FormData();
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/wav' });
@@ -208,7 +297,8 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     formData.append('model', isGroq ? 'whisper-large-v3' : 'whisper-1');
     formData.append('response_format', 'json');
     formData.append('temperature', '0.0');
-    formData.append('prompt', 'Hospital admitted patient names: Santhosh, Santosh, Kumar, John, Ramasamy, Murugan, Anita, Meena, Madasamy, Vel, Room Track Bot');
+    formData.append('language', 'en'); // Enforce English alphabet to prevent foreign language hallucinations
+    formData.append('prompt', promptText);
 
     const sttRes = await fetch(apiUrl, {
       method: 'POST',
@@ -224,8 +314,10 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     const { text } = await sttRes.json();
     let transcribedName = (text || '').replace(/\0/g, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
 
+    console.log(`[Voice Search] Raw Whisper text: "${text}" | Cleaned: "${transcribedName}"`);
+
     // Filter out known Whisper silence hallucinations (e.g. "you", "thank you", "thanks", "bye")
-    if (/^(you|thank you|thanks|thank|bye|the|subtitles|watching)$/i.test(transcribedName)) {
+    if (/^(you|thank you|thanks|thank|bye|the|subtitles|watching|please|subscribe|thank you for watching)$/i.test(transcribedName)) {
       transcribedName = '';
     }
 
@@ -235,18 +327,21 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     };
 
     if (!transcribedName) {
+      console.log('[Voice Search] Silence or empty speech detected.');
       return res.json({ success: false, transcribed_name: '', message: 'Could not understand audio' });
     }
 
-    // Search patient in database using smart multi-token search (Name + Father + City)
+    // Search patient in database using smart multi-token fuzzy search (Name + Father + City)
     const rows = await searchAdmittedPatients(transcribedName);
 
     if (!rows.length) {
+      console.log(`[Voice Search] No patient match found for: "${transcribedName}"`);
       await logSearch(false, null, null, null);
       return res.json({ success: false, transcribed_name: transcribedName, message: 'Patient not found' });
     }
 
     const patient = rows[0];
+    console.log(`[Voice Search] MATCH FOUND: ${patient.name} -> Floor: ${patient.floor}, Room: ${patient.room}`);
     await logSearch(true, null, patient.floor, patient.room);
     
     // Return result to ESP32 so it can trigger DFPlayer Mini
