@@ -142,6 +142,25 @@ void initI2S() {
   Serial.println(">>> INMP441 I2S Microphone Ready!");
 }
 
+// Parse URL into host, port, and path
+void parseUrl(String url, String &host, int &port, String &path) {
+  if (url.startsWith("http://")) url = url.substring(7);
+  else if (url.startsWith("https://")) url = url.substring(8);
+
+  int slashIdx = url.indexOf('/');
+  String hostPort = (slashIdx >= 0) ? url.substring(0, slashIdx) : url;
+  path = (slashIdx >= 0) ? url.substring(slashIdx) : "/";
+
+  int colonIdx = hostPort.indexOf(':');
+  if (colonIdx >= 0) {
+    host = hostPort.substring(0, colonIdx);
+    port = hostPort.substring(colonIdx + 1).toInt();
+  } else {
+    host = hostPort;
+    port = 80;
+  }
+}
+
 // Generate Standard 44-byte WAV Header
 void createWavHeader(byte* header, int totalDataLen) {
   int totalFileLen = totalDataLen + 36;
@@ -368,17 +387,17 @@ void recordAndSearchVoice() {
 
   showLCD("Searching...", "Processing Voice");
 
-  // Transmit WAV audio via HTTP POST to /api/device/voice-search
+  // Transmit WAV audio via HTTP POST to /api/device/voice-search using streaming WiFiClient
   if (WiFi.status() == WL_CONNECTED) {
+    String host; int port; String path;
+    parseUrl(API_BASE, host, port, path);
+    String fullPath = path + "/device/voice-search";
+
     WiFiClient client;
-    WiFiClientSecure secureClient;
-    HTTPClient http;
-    http.setTimeout(HTTP_TIMEOUT_MS);
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
 
-    String url = String(API_BASE) + "/device/voice-search";
-    bool begun = url.startsWith("https://") ? (secureClient.setInsecure(), http.begin(secureClient, url)) : http.begin(client, url);
-
-    if (begun) {
+    Serial.printf("Connecting to %s:%d to send voice audio...\n", host.c_str(), port);
+    if (client.connect(host.c_str(), port)) {
       String boundary = "----ESP32Boundary" + String(millis());
       String head = "--" + boundary + "\r\n" +
                     "Content-Disposition: form-data; name=\"audio\"; filename=\"audio.wav\"\r\n" +
@@ -390,47 +409,76 @@ void recordAndSearchVoice() {
 
       int totalPayloadSize = head.length() + WAV_HEADER_SIZE + WAV_DATA_SIZE + tail.length();
 
-      http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-      http.addHeader("X-API-Key", API_KEY);
-      http.addHeader("Content-Length", String(totalPayloadSize));
+      client.println("POST " + fullPath + " HTTP/1.1");
+      client.println("Host: " + host + ":" + String(port));
+      client.println("X-API-Key: " + String(API_KEY));
+      client.println("Content-Type: multipart/form-data; boundary=" + boundary);
+      client.println("Content-Length: " + String(totalPayloadSize));
+      client.println("Connection: close");
+      client.println();
 
-      // Stream the payload directly to the network
-      WiFiClient* stream = http.getStreamPtr();
-      int httpCode = http.sendRequest("POST", [head, &wavHeader, audioBuffer, tail](WiFiClient* s) {
-        s->print(head);
-        s->write(wavHeader, WAV_HEADER_SIZE);
-        s->write((uint8_t*)audioBuffer, WAV_DATA_SIZE);
-        s->print(tail);
-      }, totalPayloadSize);
+      client.print(head);
+      client.write(wavHeader, WAV_HEADER_SIZE);
 
-      if (httpCode == 200) {
-        String res = http.getString();
-        Serial.println("Voice Search Response: " + res);
+      // Stream audio buffer in 1KB chunks
+      const size_t CHUNK = 1024;
+      for (size_t offset = 0; offset < WAV_DATA_SIZE; offset += CHUNK) {
+        size_t toWrite = ((WAV_DATA_SIZE - offset) < CHUNK) ? (WAV_DATA_SIZE - offset) : CHUNK;
+        client.write(((uint8_t*)audioBuffer) + offset, toWrite);
+      }
 
-        JsonDocument doc;
-        if (deserializeJson(doc, res) == DeserializationError::Ok) {
-          if ((bool)(doc["success"] | false)) {
-            JsonObject p = doc["patient"].as<JsonObject>();
-            String heardName = String((const char*)(doc["transcribed_name"] | ""));
-            Serial.println("Whisper Understood: " + heardName);
-            handlePatientFound(p);
-            free(audioBuffer);
-            http.end();
-            return;
+      client.print(tail);
+      client.flush();
+
+      // Read HTTP response with timeout
+      unsigned long t0 = millis();
+      while (!client.available() && millis() - t0 < 8000) {
+        delay(20);
+      }
+
+      String resBody = "";
+      bool isBody = false;
+      while (client.connected() || client.available()) {
+        if (client.available()) {
+          String line = client.readStringUntil('\n');
+          if (!isBody) {
+            line.trim();
+            if (line.length() == 0) isBody = true;
           } else {
-            String heard = String((const char*)(doc["transcribed_name"] | ""));
-            Serial.println("Whisper Understood: '" + heard + "' - Patient Not Found");
-            showLCD("Patient Not", "Found!");
-            playTrack(7); // Track 0007.mp3: Not found
-            delay(2500);
+            resBody += line + "\n";
           }
         }
+      }
+      client.stop();
+      resBody.trim();
+
+      Serial.println("Voice Search Response: " + resBody);
+
+      JsonDocument doc;
+      if (deserializeJson(doc, resBody) == DeserializationError::Ok) {
+        if ((bool)(doc["success"] | false)) {
+          JsonObject p = doc["patient"].as<JsonObject>();
+          String heardName = String((const char*)(doc["transcribed_name"] | ""));
+          Serial.println("Whisper Understood: " + heardName);
+          handlePatientFound(p);
+          free(audioBuffer);
+          return;
+        } else {
+          String heard = String((const char*)(doc["transcribed_name"] | ""));
+          Serial.println("Whisper Understood: '" + heard + "' - Patient Not Found");
+          showLCD("Patient Not", "Found!");
+          playTrack(7); // Track 0007.mp3: Not found
+          delay(2500);
+        }
       } else {
-        Serial.println("Voice Search Error Code: " + String(httpCode));
-        showLCD("Voice Server", "Error: " + String(httpCode));
+        Serial.println("Voice JSON parse failed or empty response!");
+        showLCD("Voice Server", "Invalid Response");
         delay(2000);
       }
-      http.end();
+    } else {
+      Serial.println("ERROR: Could not connect to backend server!");
+      showLCD("Server Connect", "Failed");
+      delay(2000);
     }
   } else {
     showLCD("WiFi Error", "Not Connected");
