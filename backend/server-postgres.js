@@ -80,9 +80,19 @@ const extractSearchTerms = raw => {
   return cleaned.split(' ').filter(w => w.length > 0);
 };
 
+const normalizePhonetic = str => String(str || '').toLowerCase()
+  .replace(/th/g, 't')
+  .replace(/sw/g, 's')
+  .replace(/sh/g, 's')
+  .replace(/aa/g, 'a')
+  .replace(/ee/g, 'i')
+  .replace(/oo/g, 'u');
+
 const searchAdmittedPatients = async (queryText) => {
   const terms = extractSearchTerms(queryText);
   if (!terms.length) return [];
+
+  // 1. Direct Term Match
   let sql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
   const params = [];
   terms.forEach(t => {
@@ -91,7 +101,19 @@ const searchAdmittedPatients = async (queryText) => {
   });
   params.push(queryText.trim());
   sql += " ORDER BY CASE WHEN LOWER(CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''))) = LOWER($" + params.length + ") THEN 1 WHEN LOWER(COALESCE(name,patient_name)) = LOWER($" + params.length + ") THEN 2 ELSE 3 END, created_at DESC LIMIT 10";
-  return (await q(sql, params)).rows;
+  let rows = (await q(sql, params)).rows;
+  if (rows.length > 0) return rows;
+
+  // 2. Phonetic Fallback (e.g. 'Santosh' -> 'SANTHOSH', 'Ramaswamy' -> 'RAMASAMY')
+  let phonSql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
+  const phonParams = [];
+  terms.forEach(t => {
+    const norm = normalizePhonetic(t);
+    phonParams.push('%' + norm + '%');
+    phonSql += " AND REPLACE(REPLACE(REPLACE(REPLACE(LOWER(CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''), COALESCE(city,''), COALESCE(patient_id,patient_code))), 'th', 't'), 'sw', 's'), 'sh', 's'), 'aa', 'a') LIKE $" + phonParams.length;
+  });
+  phonSql += " ORDER BY created_at DESC LIMIT 10";
+  return (await q(phonSql, phonParams)).rows;
 };
 
 const adminOnly = asyncRoute(async(req,res,next)=>{
@@ -160,10 +182,9 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/wav' });
     formData.append('file', blob, 'audio.wav');
     formData.append('model', isGroq ? 'whisper-large-v3' : 'whisper-1');
-    formData.append('language', 'en');
     formData.append('response_format', 'json');
     formData.append('temperature', '0.0');
-    formData.append('prompt', 'Hospital patient names: Santhosh, Kumar, John, Ramasamy, Murugan, Anita, Meena, Madasamy, Vel');
+    formData.append('prompt', 'Hospital admitted patient names: Santhosh, Santosh, Kumar, John, Ramasamy, Murugan, Anita, Meena, Madasamy, Vel, Room Track Bot');
 
     const sttRes = await fetch(apiUrl, {
       method: 'POST',
