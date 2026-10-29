@@ -109,7 +109,7 @@ void initI2S() {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = SAMPLE_RATE,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT, // INMP441 outputs 24-bit in 32-bit slot
-    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT, // Read both channels to auto-detect L/R pin
     .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_STAND_I2S),
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = 4,
@@ -364,26 +364,42 @@ void recordAndSearchVoice() {
     return;
   }
 
-  // Record 32-bit samples from INMP441, convert to 16-bit
+  // Record stereo samples from INMP441, select active channel and apply volume boost
   size_t bytesRead = 0;
   int samplesRecorded = 0;
   const int CHUNK_SAMPLES = 256;
   int32_t chunk32[CHUNK_SAMPLES];
+  int32_t peakVolume = 0;
 
   unsigned long recordStart = millis();
   while (samplesRecorded < NUM_SAMPLES) {
     i2s_read(I2S_PORT, chunk32, CHUNK_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
     int readSamples = bytesRead / sizeof(int32_t);
 
-    for (int i = 0; i < readSamples && samplesRecorded < NUM_SAMPLES; i++) {
-      // INMP441 sends 24-bit audio in upper bits of 32-bit word.
-      // Shift right by 14 to convert to 16-bit with clean audible volume.
-      audioBuffer[samplesRecorded++] = (int16_t)(chunk32[i] >> 14);
+    for (int i = 0; i < readSamples - 1 && samplesRecorded < NUM_SAMPLES; i += 2) {
+      int32_t left = chunk32[i];
+      int32_t right = chunk32[i + 1];
+      // Auto-detect which channel has audio (whether L/R is GND, 3.3V, or floating)
+      int32_t active = (abs(left) > abs(right)) ? left : right;
+
+      // Shift by 12 with saturation clamping for clear audible volume
+      int32_t scaled = active >> 12;
+      if (scaled > 32767) scaled = 32767;
+      if (scaled < -32768) scaled = -32768;
+
+      int16_t sample16 = (int16_t)scaled;
+      audioBuffer[samplesRecorded++] = sample16;
+
+      int absVal = abs((int)sample16);
+      if (absVal > peakVolume) peakVolume = absVal;
     }
   }
 
   unsigned long recordDuration = millis() - recordStart;
-  Serial.printf(">>> Recorded %d samples in %lu ms!\n", samplesRecorded, recordDuration);
+  Serial.printf(">>> Recorded %d samples in %lu ms. Audio Peak Level: %d / 32767\n", samplesRecorded, recordDuration, peakVolume);
+  if (peakVolume < 200) {
+    Serial.println(">>> [WARNING] Audio is very low or silent! Check INMP441 wiring or speak closer (15 cm)!");
+  }
 
   showLCD("Searching...", "Processing Voice");
 

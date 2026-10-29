@@ -162,6 +162,8 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     formData.append('model', isGroq ? 'whisper-large-v3' : 'whisper-1');
     formData.append('language', 'en');
     formData.append('response_format', 'json');
+    formData.append('temperature', '0.0');
+    formData.append('prompt', 'Hospital patient names: Santhosh, Kumar, John, Ramasamy, Murugan, Anita, Meena, Madasamy, Vel');
 
     const sttRes = await fetch(apiUrl, {
       method: 'POST',
@@ -175,7 +177,12 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     }
 
     const { text } = await sttRes.json();
-    const transcribedName = (text || '').replace(/\0/g, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
+    let transcribedName = (text || '').replace(/\0/g, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
+
+    // Filter out known Whisper silence hallucinations (e.g. "you", "thank you", "thanks", "bye")
+    if (/^(you|thank you|thanks|thank|bye|the|subtitles|watching)$/i.test(transcribedName)) {
+      transcribedName = '';
+    }
 
     // Log the search
     const logSearch = async (found, id, floor, room) => {
