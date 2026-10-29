@@ -59,6 +59,7 @@ static const int ECHO_PIN      = 18;
 static const int DF_RX_PIN     = 16; // ESP32 RX (connect to DFPlayer TX)
 static const int DF_TX_PIN     = 17; // ESP32 TX (connect to DFPlayer RX via 1k resistor)
 static const int GREEN_LED_PIN = 4;  // Green Indicator LED on GPIO 4 (Safe non-strapping pin)
+static const int BUTTON_PIN    = 23; // Voice Input Push Button on GPIO 23 (INPUT_PULLUP to GND)
 
 // INMP441 I2S Pins
 #define I2S_PORT        I2S_NUM_0
@@ -97,12 +98,14 @@ unsigned long cooldownEndTime = 0;
 enum BotState {
   STATE_STANDBY,
   STATE_CONFIRMING_PERSON,
+  STATE_WAITING_FOR_BUTTON,
   STATE_RECORDING,
   STATE_PROCESSING
 };
 
 BotState currentState = STATE_STANDBY;
 unsigned long personDetectionStart = 0;
+unsigned long buttonWaitStart = 0;
 
 // ======================== I2S INITIALIZATION ========================
 void initI2S() {
@@ -531,6 +534,14 @@ void recordAndSearchVoice() {
           }
           playTrack(7); // Track 0007.mp3: Not found
           delay(2500);
+
+          // Requirement 4: Person not found -> Return to button input prompt
+          free(audioBuffer);
+          currentState = STATE_WAITING_FOR_BUTTON;
+          buttonWaitStart = millis();
+          showLCD("Press Button To", "Try Again...");
+          Serial.println(">>> Patient Not Found: Returned to button prompt for another try.");
+          return;
         }
       } else {
         Serial.println("Voice JSON parse failed or empty response!");
@@ -548,8 +559,9 @@ void recordAndSearchVoice() {
   }
 
   free(audioBuffer);
-  cooldownEndTime = millis() + 4000;
-  setStandbyScreen();
+  currentState = STATE_WAITING_FOR_BUTTON;
+  buttonWaitStart = millis();
+  showLCD("Press Button To", "Try Again...");
 }
 
 // UDP Auto-Discovery of Backend Server IP
@@ -699,6 +711,8 @@ void setup() {
   pinMode(GREEN_LED_PIN, OUTPUT);
   digitalWrite(GREEN_LED_PIN, LOW); // Start with Green LED OFF
 
+  pinMode(BUTTON_PIN, INPUT_PULLUP); // Push Button on GPIO 23 to GND
+
   Wire.begin(21, 22);
   lcd.init();
   lcd.backlight();
@@ -736,24 +750,52 @@ void loop() {
   if (currentMillis >= cooldownEndTime) {
     long distance = getDistanceCm();
 
-    if (distance > 0 && distance < 40) {
-      if (currentState == STATE_STANDBY) {
+    // In STANDBY: Detect person approaching (< 40cm)
+    if (currentState == STATE_STANDBY) {
+      if (distance > 0 && distance < 40) {
         currentState = STATE_CONFIRMING_PERSON;
         personDetectionStart = millis();
         showLCD("Person Detected", "Please Wait...");
         Serial.println("Person detected (< 40cm). Confirming...");
       }
-      else if (currentState == STATE_CONFIRMING_PERSON) {
-        // Confirmed person standing for 500ms
+    }
+    // In CONFIRMING: Confirm person stayed for 500ms
+    else if (currentState == STATE_CONFIRMING_PERSON) {
+      if (distance > 0 && distance < 45) {
         if (currentMillis - personDetectionStart >= 500) {
-          currentState = STATE_RECORDING;
-          recordAndSearchVoice();
+          // Requirement 1: Welcome to Room Track Bot screen and voice output
+          Serial.println(">>> Person Confirmed! Playing Welcome Screen & Voice...");
+          showLCD("Welcome to", "Room Track Bot");
+          playTrack(1); // Track 1: Welcome voice message
+          delay(getTrackDuration(1)); // Wait for welcome audio to finish
+
+          // Requirement 2: Prompt user to press button for voice input
+          currentState = STATE_WAITING_FOR_BUTTON;
+          buttonWaitStart = millis();
+          showLCD("Press Button To", "Speak Name...");
+          Serial.println(">>> Ready: Press button on GPIO 23 to speak!");
         }
+      } else {
+        // False alarm / person moved away quickly
+        setStandbyScreen();
       }
     }
-    else if (currentState == STATE_CONFIRMING_PERSON) {
-      // False alarm / person moved away quickly
-      setStandbyScreen();
+    // In WAITING_FOR_BUTTON: Check if push button is pressed
+    else if (currentState == STATE_WAITING_FOR_BUTTON) {
+      // Check push button (active LOW with internal pull-up on GPIO 23)
+      if (digitalRead(BUTTON_PIN) == LOW) {
+        Serial.println(">>> Push Button Pressed! Starting voice recording...");
+        delay(150); // Debounce
+        while (digitalRead(BUTTON_PIN) == LOW) delay(10); // Wait for release
+
+        currentState = STATE_RECORDING;
+        recordAndSearchVoice();
+      }
+      // Timeout: If visitor walked away (> 80cm) for 20 seconds without pressing button
+      else if ((distance > 80 || distance == 999) && (currentMillis - buttonWaitStart >= 20000)) {
+        Serial.println(">>> Button wait timeout (visitor left). Returning to standby.");
+        setStandbyScreen();
+      }
     }
   }
 
@@ -762,8 +804,8 @@ void loop() {
     ensureWiFiConnected();
   }
 
-  // 3. Website polling and heartbeat during standby only
-  if (currentState == STATE_STANDBY) {
+  // 3. Website polling and heartbeat during standby or button wait
+  if (currentState == STATE_STANDBY || currentState == STATE_WAITING_FOR_BUTTON) {
     if (millis() - lastPoll >= POLL_INTERVAL_MS) {
       lastPoll = millis();
       pollWebsiteDispatch();
