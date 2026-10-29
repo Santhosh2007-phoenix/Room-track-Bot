@@ -58,7 +58,7 @@ static const int TRIG_PIN      = 5;
 static const int ECHO_PIN      = 18;
 static const int DF_RX_PIN     = 16; // ESP32 RX (connect to DFPlayer TX)
 static const int DF_TX_PIN     = 17; // ESP32 TX (connect to DFPlayer RX via 1k resistor)
-static const int GREEN_LED_PIN = 2;  // Green Indicator LED (Glows when Listening, OFF during processing)
+static const int GREEN_LED_PIN = 4;  // Green Indicator LED on GPIO 4 (Safe non-strapping pin)
 
 // INMP441 I2S Pins
 #define I2S_PORT        I2S_NUM_0
