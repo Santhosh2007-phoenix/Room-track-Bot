@@ -356,11 +356,10 @@ void recordAndSearchVoice() {
     return;
   }
 
-  showLCD("Get Ready...", "3, 2, 1...");
-  delay(800);
+  // Flush previous DMA buffer
   i2s_zero_dma_buffer(I2S_PORT);
 
-  // Turn ON Green LED when prompt says Speak Name Now
+  // Turn ON Green LED immediately when recording begins
   digitalWrite(GREEN_LED_PIN, HIGH);
   showLCD("Speak Name Now!", ">>> LISTENING <<<");
   Serial.println("\n[Voice Recording] Listening for 3 seconds...");
@@ -368,6 +367,7 @@ void recordAndSearchVoice() {
   // Allocate audio buffer for 16-bit PCM samples
   int16_t* audioBuffer = (int16_t*) malloc(WAV_DATA_SIZE);
   if (!audioBuffer) {
+    digitalWrite(GREEN_LED_PIN, LOW);
     Serial.println("ERROR: Not enough memory for audio buffer!");
     showLCD("Memory Error", "Out of RAM");
     delay(2000);
@@ -375,51 +375,32 @@ void recordAndSearchVoice() {
     return;
   }
 
-  // Record stereo samples from INMP441, lock to active channel and remove DC offset
+  // Record stereo samples from INMP441, auto-detect active channel per sample, remove DC offset
   size_t bytesRead = 0;
   int samplesRecorded = 0;
   const int CHUNK_SAMPLES = 256;
   int32_t chunk32[CHUNK_SAMPLES];
   int32_t peakVolume = 0;
-
-  // Calibrate & lock active channel once (INMP441 with L/R tied to GND outputs on Left channel)
-  int activeChannel = 0; // 0 = Left (chunk32[i]), 1 = Right (chunk32[i+1])
-  int64_t leftEnergy = 0;
-  int64_t rightEnergy = 0;
-
-  i2s_read(I2S_PORT, chunk32, CHUNK_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
-  int calSamples = bytesRead / sizeof(int32_t);
-  for (int i = 0; i < calSamples - 1; i += 2) {
-    int32_t l = chunk32[i] >> 14;
-    int32_t r = chunk32[i + 1] >> 14;
-    leftEnergy += (int64_t)l * l;
-    rightEnergy += (int64_t)r * r;
-  }
-  if (rightEnergy > leftEnergy * 2) {
-    activeChannel = 1;
-  } else {
-    activeChannel = 0;
-  }
-  Serial.printf("[INMP441] Locked to %s channel (L-Energy: %lld, R-Energy: %lld)\n",
-    activeChannel == 0 ? "LEFT" : "RIGHT", leftEnergy, rightEnergy);
-
   int32_t dcAvg = 0;
   unsigned long recordStart = millis();
+
   while (samplesRecorded < NUM_SAMPLES) {
     i2s_read(I2S_PORT, chunk32, CHUNK_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
     int readSamples = bytesRead / sizeof(int32_t);
 
     for (int i = 0; i < readSamples - 1 && samplesRecorded < NUM_SAMPLES; i += 2) {
-      int32_t raw = (activeChannel == 0) ? chunk32[i] : chunk32[i + 1];
+      int32_t s0 = chunk32[i];
+      int32_t s1 = chunk32[i + 1];
+      // Auto-pick whichever stereo channel contains the microphone signal
+      int32_t raw = (abs(s0) > abs(s1)) ? s0 : s1;
 
       // Remove DC offset using running average
       dcAvg += (raw - dcAvg) >> 5;
       int32_t centered = raw - dcAvg;
 
-      // Scale 24-bit audio to 16-bit PCM with clear gain for speech
-      // INMP441 is MSB aligned in 32-bit slot (bits 31..8).
-      // >> 13 provides +18dB boost without clipping for speaking distance of 15-30cm
-      int32_t scaled = centered >> 13;
+      // INMP441 24-bit audio is MSB-aligned in 32-bit slot (bits 31..8).
+      // >> 12 converts 24-bit MSB to 16-bit PCM with optimal gain (+6dB boost for speaking 15-30cm)
+      int32_t scaled = centered >> 12;
       if (scaled > 32767) scaled = 32767;
       if (scaled < -32768) scaled = -32768;
 
@@ -433,12 +414,23 @@ void recordAndSearchVoice() {
 
   unsigned long recordDuration = millis() - recordStart;
   Serial.printf(">>> Recorded %d samples in %lu ms. Audio Peak Level: %d / 32767\n", samplesRecorded, recordDuration, peakVolume);
-  if (peakVolume < 200) {
-    Serial.println(">>> [WARNING] Audio is very low or silent! Check INMP441 wiring or speak closer (15 cm)!");
+
+  // Turn OFF Green LED when recording finishes
+  digitalWrite(GREEN_LED_PIN, LOW);
+
+  // Guard against silence: if peak volume is under 150, visitor did not speak
+  if (peakVolume < 150) {
+    Serial.println(">>> [WARNING] Audio is silent (peak < 150)! Visitor did not speak or was too quiet.");
+    showLCD("No Voice Heard!", "Speak Louder...");
+    playTrack(7); // Track 0007.mp3: Not found / prompt
+    delay(2200);
+    free(audioBuffer);
+    currentState = STATE_WAITING_FOR_BUTTON;
+    buttonWaitStart = millis();
+    showLCD("Press Button To", "Try Again...");
+    return;
   }
 
-  // Turn OFF Green LED when recording finishes and processing begins
-  digitalWrite(GREEN_LED_PIN, LOW);
   showLCD("Searching...", "Processing Voice");
 
   // Transmit WAV audio via HTTP POST to /api/device/voice-search using streaming WiFiClient

@@ -7,3 +7,5 @@ dist/
 backend/database/*.sqlite
 backend/database/*.sqlite-shm
 backend/database/*.sqlite-wal
+
+*.wav

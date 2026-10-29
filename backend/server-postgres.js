@@ -271,6 +271,19 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     fs.writeFileSync('last_received_voice.wav', req.file.buffer);
   } catch (_) {}
 
+  // Check PCM audio amplitude in WAV buffer (16-bit PCM samples start after 44-byte WAV header)
+  let pcmPeak = 0;
+  if (req.file.buffer && req.file.buffer.length > 44) {
+    for (let i = 44; i < req.file.buffer.length - 1; i += 2) {
+      const sample = Math.abs(req.file.buffer.readInt16LE(i));
+      if (sample > pcmPeak) pcmPeak = sample;
+    }
+  }
+  if (pcmPeak < 120) {
+    console.log(`[Voice Search] Audio buffer silent/empty (PCM Peak: ${pcmPeak}). Rejecting empty voice.`);
+    return res.json({ success: false, transcribed_name: '', message: 'No voice heard. Please speak louder.' });
+  }
+
   // Fallback API keys: users can set these in .env
   const STT_API_KEY = process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
   if (!STT_API_KEY) return res.status(500).json({ error: 'STT API key (GROQ_API_KEY or OPENAI_API_KEY) not configured in .env' });
@@ -317,7 +330,7 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     console.log(`[Voice Search] Raw Whisper text: "${text}" | Cleaned: "${transcribedName}"`);
 
     // Filter out known Whisper silence hallucinations (e.g. "you", "thank you", "thanks", "bye")
-    if (/^(you|thank you|thanks|thank|bye|the|subtitles|watching|please|subscribe|thank you for watching)$/i.test(transcribedName)) {
+    if ((/^(you|thank you|thanks|thank|bye|the|subtitles|watching|please|subscribe|thank you for watching)$/i.test(transcribedName) || /for more information|wwwfema|fema/i.test(transcribedName))) {
       transcribedName = '';
     }
 
