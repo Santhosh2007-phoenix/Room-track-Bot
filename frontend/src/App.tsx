@@ -56,7 +56,16 @@ function App(){
  useEffect(()=>{if(!toast)return;const t=window.setTimeout(()=>setToast(''),3200);return()=>window.clearTimeout(t)},[toast]);
  async function doLogin(e:React.FormEvent){e.preventDefault();setLoginBusy(true);setError('');try{const d=await api<any>('/auth/login',{method:'POST',body:JSON.stringify(login)});setToken(d.token);setTokenState(d.token);setUser(d.user.username);notify('Welcome back. Login successful.')}catch(e:any){setError(e.message)}finally{setLoginBusy(false)}}
  function logout(){clearToken();setTokenState('');setPatients([])}
- const visiblePatients=useMemo(()=>patients.filter(p=>(!search||[p.name,p.patient_id,p.room,p.floor,p.father_name,p.city].some(v=>String(v||'').toLowerCase().includes(search.toLowerCase())))&&(!floorFilter||p.floor===floorFilter)&&(!statusFilter||p.status===statusFilter)),[patients,search,floorFilter,statusFilter]);
+ const visiblePatients=useMemo(()=>{
+  const terms=search.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  return patients.filter(p=>{
+   if(floorFilter&&p.floor!==floorFilter)return false;
+   if(statusFilter&&p.status!==statusFilter)return false;
+   if(!terms.length)return true;
+   const combined=[p.name,p.father_name,p.city,p.patient_id,p.room,p.floor].filter(Boolean).join(' ').toLowerCase();
+   return terms.every(t=>combined.includes(t));
+  });
+ },[patients,search,floorFilter,statusFilter]);
  function openAddPatient(){setEditing(null);setForm({...blankPatient,floor:floors[1]?.name||floors[0]?.name||'2F',room:''});setModal('patient')}
  function openEditPatient(p:Patient){setEditing(p);setForm({...p,father_name:p.father_name||'',city:p.city||'',age:p.age==null?'':String(p.age)});setModal('patient')}
  async function savePatient(e:React.FormEvent){e.preventDefault();setLoading(true);try{

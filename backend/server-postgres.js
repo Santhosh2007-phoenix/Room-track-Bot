@@ -69,6 +69,31 @@ const q = (text, params=[]) => pool.query(text, params);
 const validate = (req,res,next) => { const errors=validationResult(req); if(!errors.isEmpty()) return res.status(400).json({error:'Validation failed',details:errors.array()}); next(); };
 const asyncRoute = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
 const publicPatient = p => ({id:p.patient_id,name:p.name,floor:p.floor,room:p.room,father_name:p.father_name||'',city:p.city||''});
+
+const extractSearchTerms = raw => {
+  if (!raw) return [];
+  const cleaned = String(raw).toLowerCase()
+    .replace(/\b(son\s+of|daughter\s+of|wife\s+of|care\s+of|s\/o|d\/o|w\/o|c\/o|s\s+o|d\s+o|w\s+o|father|appa|mr|mrs|patient)\b/gi, ' ')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.split(' ').filter(w => w.length > 0);
+};
+
+const searchAdmittedPatients = async (queryText) => {
+  const terms = extractSearchTerms(queryText);
+  if (!terms.length) return [];
+  let sql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
+  const params = [];
+  terms.forEach(t => {
+    params.push('%' + t + '%');
+    sql += " AND CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''), COALESCE(city,''), COALESCE(patient_id,patient_code)) ILIKE $" + params.length;
+  });
+  params.push(queryText.trim());
+  sql += " ORDER BY CASE WHEN LOWER(CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''))) = LOWER($" + params.length + ") THEN 1 WHEN LOWER(COALESCE(name,patient_name)) = LOWER($" + params.length + ") THEN 2 ELSE 3 END, created_at DESC LIMIT 10";
+  return (await q(sql, params)).rows;
+};
+
 const adminOnly = asyncRoute(async(req,res,next)=>{
   const token=(req.headers.authorization||'').replace(/^Bearer\s+/i,'');
   if(!token) return res.status(401).json({error:'Authentication required'});
@@ -80,7 +105,13 @@ const refreshRooms = async()=>q(`UPDATE rooms r SET status=CASE WHEN r.status='M
 const getPatient = async id => (await q('SELECT * FROM patients WHERE id=$1 AND deleted_at IS NULL',[id])).rows[0];
 const listPatients = async({search='',floor='',room='',department='',status='',limit=1000,offset=0}={})=>{
  let sql="SELECT id,COALESCE(patient_id,patient_code) AS patient_id,COALESCE(name,patient_name) AS name,floor,room,COALESCE(father_name,'') AS father_name,COALESCE(city,'') AS city,department,age,gender,admission_date,contact_reference,status,notes,created_at,updated_at,deleted_at FROM patients WHERE deleted_at IS NULL"; const a=[]; const add=(clause,val)=>{a.push(val);sql+=clause.replace('?',`$${a.length}`)};
- if(search.trim()){a.push(`%${search.trim()}%`); const n=a.length; sql+=` AND (COALESCE(name,patient_name) ILIKE $${n} OR COALESCE(patient_id,patient_code) ILIKE $${n} OR room ILIKE $${n} OR floor ILIKE $${n} OR COALESCE(father_name,'') ILIKE $${n} OR COALESCE(city,'') ILIKE $${n})`;}
+ if(search.trim()){
+   const terms = extractSearchTerms(search);
+   terms.forEach(t => {
+     a.push('%' + t + '%');
+     sql += ` AND (CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''), COALESCE(city,''), COALESCE(patient_id,patient_code), room, floor, department) ILIKE $${a.length})`;
+   });
+ }
  for(const [key,val] of [['floor',floor],['room',room],['department',department],['status',status]]) if(val)add(` AND ${key}=?`,val);
  a.push(limit);sql+=` ORDER BY created_at DESC LIMIT $${a.length}`;a.push(offset);sql+=` OFFSET $${a.length}`;
  return (await q(sql,a)).rows;
@@ -95,8 +126,7 @@ app.get('/api/auth/me',adminOnly,(req,res)=>res.json({user:req.admin}));
 // Public visitor routes return only name, floor and room.
 app.get('/api/visitor/search',rateLimit({windowMs:60000,limit:40}),asyncRoute(async(req,res)=>{
  const name=String(req.query.name||'').replace(/\0/g,'').trim().replace(/\s+/g,' ');if(!name||name.length>100)return res.status(400).json({success:false,message:'Enter a valid patient name'});
- const r=await q("SELECT id,COALESCE(patient_id,patient_code) AS patient_id,COALESCE(name,patient_name) AS name,floor,room,room_id,COALESCE(father_name,'') AS father_name,COALESCE(city,'') AS city FROM patients WHERE (LOWER(COALESCE(name,patient_name))=LOWER($1) OR LOWER(COALESCE(patient_id,patient_code))=LOWER($1)) AND status='Admitted' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 10",[name]);
- const rows=r.rows;const p=rows[0];
+ const rows=await searchAdmittedPatients(name);const p=rows[0];
  await q('INSERT INTO search_history(searched_name,result,floor,room,searched_at) VALUES($1,$2,$3,$4,NOW())',[name,p?'FOUND':'NOT FOUND',p?.floor||null,p?.room||null]);
  if(!p)return res.json({success:true,found:false,message:'Patient not found'});
  res.json({success:true,found:true,count:rows.length,patients:rows.map(publicPatient),patient:publicPatient(p)});
@@ -156,18 +186,15 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
       return res.json({ success: false, transcribed_name: '', message: 'Could not understand audio' });
     }
 
-    // Search patient in database
-    const result = await q(
-      `SELECT name, floor, room FROM patients WHERE name ILIKE $1 AND status='Admitted' AND deleted_at IS NULL LIMIT 1`, 
-      [`%${transcribedName}%`]
-    );
+    // Search patient in database using smart multi-token search (Name + Father + City)
+    const rows = await searchAdmittedPatients(transcribedName);
 
-    if (result.rowCount === 0) {
+    if (!rows.length) {
       await logSearch(false, null, null, null);
       return res.json({ success: false, transcribed_name: transcribedName, message: 'Patient not found' });
     }
 
-    const patient = result.rows[0];
+    const patient = rows[0];
     await logSearch(true, null, patient.floor, patient.room);
     
     // Return result to ESP32 so it can trigger DFPlayer Mini
@@ -175,9 +202,12 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
       success: true,
       transcribed_name: transcribedName,
       patient: {
+        id: patient.patient_id,
         name: patient.name,
         floor: patient.floor,
-        room: patient.room
+        room: patient.room,
+        father_name: patient.father_name,
+        city: patient.city
       }
     });
 
@@ -188,7 +218,7 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
 }));
 app.get('/api/search-history',adminOnly,asyncRoute(async(req,res)=>{const period=String(req.query.period||'');let where='';if(period==='today')where='WHERE created_at >= CURRENT_DATE';else if(period==='week')where="WHERE created_at >= NOW()-INTERVAL '7 days'";else if(period==='month')where="WHERE created_at >= NOW()-INTERVAL '30 days'";res.json((await q(`SELECT id,searched_name,result,floor,room,created_at FROM search_history ${where} ORDER BY id DESC LIMIT 200`)).rows);}));
 app.use('/api/patients',adminOnly);
-app.get('/api/patients',asyncRoute(async(req,res)=>{const page=Math.max(1,Number(req.query.page)||1),pageSize=Math.min(100,Math.max(1,Number(req.query.pageSize)||20));const filters={search:String(req.query.search||''),floor:String(req.query.floor||''),room:String(req.query.room||''),department:String(req.query.department||''),status:String(req.query.status||''),limit:pageSize,offset:(page-1)*pageSize};const items=await listPatients(filters);let sql='SELECT COUNT(*)::int AS n FROM patients WHERE deleted_at IS NULL';const a=[];if(filters.search.trim()){a.push(`%${filters.search.trim()}%`);const n=a.length;sql+=` AND (name ILIKE $${n} OR patient_id ILIKE $${n} OR room ILIKE $${n} OR floor ILIKE $${n})`;}for(const [k,v] of [['floor',filters.floor],['room',filters.room],['department',filters.department],['status',filters.status]])if(v){a.push(v);sql+=` AND ${k}=$${a.length}`;}const total=Number((await q(sql,a)).rows[0].n);res.json({items,total,page,pageSize});}));
+app.get('/api/patients',asyncRoute(async(req,res)=>{const page=Math.max(1,Number(req.query.page)||1),pageSize=Math.min(100,Math.max(1,Number(req.query.pageSize)||20));const filters={search:String(req.query.search||''),floor:String(req.query.floor||''),room:String(req.query.room||''),department:String(req.query.department||''),status:String(req.query.status||''),limit:pageSize,offset:(page-1)*pageSize};const items=await listPatients(filters);let sql='SELECT COUNT(*)::int AS n FROM patients WHERE deleted_at IS NULL';const a=[];if(filters.search.trim()){const terms=extractSearchTerms(filters.search);terms.forEach(t=>{a.push('%'+t+'%');sql+=` AND (CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''), COALESCE(city,''), COALESCE(patient_id,patient_code), room, floor, department) ILIKE $${a.length})`;});}for(const [k,v] of [['floor',filters.floor],['room',filters.room],['department',filters.department],['status',filters.status]])if(v){a.push(v);sql+=` AND ${k}=$${a.length}`;}const total=Number((await q(sql,a)).rows[0].n);res.json({items,total,page,pageSize});}));
 app.get('/api/patients/search',asyncRoute(async(req,res)=>res.json(await listPatients({search:String(req.query.name||req.query.q||''),limit:100}))));
 app.get('/api/patients/:id',asyncRoute(async(req,res)=>{const p=await getPatient(req.params.id);if(!p)return res.status(404).json({error:'Patient not found'});res.json(p);}));
 const patientValidators=[body('patient_id').trim().isLength({min:2,max:30}),body('name').trim().isLength({min:1,max:100}),body('floor').trim().isLength({min:1,max:20}),body('room').trim().isLength({min:1,max:20}),body('father_name').optional({nullable:true}).trim().isLength({max:100}),body('city').optional({nullable:true}).trim().isLength({max:100}),body('department').optional({nullable:true}).trim().isLength({max:100}),body('age').optional({nullable:true,checkFalsy:true}).isInt({min:0,max:130}).toInt(),body('gender').optional({nullable:true}).isString().isLength({max:30}),body('admission_date').optional({nullable:true}).isISO8601(),body('status').optional().isIn(['Admitted','Discharged','Transferred']),body('notes').optional({nullable:true}).isString().isLength({max:2000})];
