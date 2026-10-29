@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react';
-import { X, Navigation, MapPin, Check, Send, Building2, Footprints, Info } from 'lucide-react';
+import { X, Navigation, Building2, Footprints } from 'lucide-react';
 
 interface PatientLocation {
   id?: string | number;
@@ -15,13 +14,9 @@ interface PatientLocation {
 interface FloorMapModalProps {
   patient: PatientLocation;
   onClose: () => void;
-  onDispatch?: (patientId: string) => Promise<void>;
 }
 
-export function FloorMapModal({ patient, onClose, onDispatch }: FloorMapModalProps) {
-  const [dispatching, setDispatching] = useState(false);
-  const [dispatched, setDispatched] = useState(false);
-
+export function FloorMapModal({ patient, onClose }: FloorMapModalProps) {
   // Parse room number to determine layout position
   const cleanRoom = (patient.room || '').trim();
   const roomDigits = cleanRoom.replace(/\D/g, '');
@@ -119,19 +114,6 @@ export function FloorMapModal({ patient, onClose, onDispatch }: FloorMapModalPro
   const targetDoorY = activeRoom.doorY;
 
   const pathD = `M ${startX} ${startY} L ${cornerX} ${cornerY} L ${targetDoorX} ${targetDoorY}`;
-
-  const handleSendToBot = async () => {
-    if (!onDispatch) return;
-    setDispatching(true);
-    try {
-      await onDispatch(String(patient.patient_id || patient.id));
-      setDispatched(true);
-    } catch (_) {
-      // Ignored
-    } finally {
-      setDispatching(false);
-    }
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-slate-900/70 backdrop-blur-sm animate-fadeIn" style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
@@ -378,43 +360,16 @@ export function FloorMapModal({ patient, onClose, onDispatch }: FloorMapModalPro
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '14px', borderTop: '1px solid #e2e8f0', flexWrap: 'wrap', gap: '10px' }}>
-            <div style={{ fontSize: '0.85rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Info size={15} /> Room Track Bot can also announce this location verbally.
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px' }}>
-              {onDispatch && (
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={handleSendToBot}
-                  disabled={dispatching || dispatched}
-                  style={{ background: dispatched ? '#16a34a' : '#0f766e', borderColor: dispatched ? '#16a34a' : '#0f766e' }}
-                >
-                  {dispatched ? (
-                    <>
-                      <Check size={16} /> Location Sent to Bot!
-                    </>
-                  ) : dispatching ? (
-                    'Sending...'
-                  ) : (
-                    <>
-                      <Send size={16} /> Dispatch to Room Track Bot
-                    </>
-                  )}
-                </button>
-              )}
-
-              <button 
-                type="button" 
-                className="btn secondary" 
-                onClick={onClose}
-              >
-                Close Map
-              </button>
-            </div>
+          {/* Action Footer */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: '10px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+            <button 
+              type="button" 
+              className="btn secondary" 
+              onClick={onClose}
+              style={{ padding: '10px 24px', fontSize: '13px', fontWeight: 650 }}
+            >
+              Close Map
+            </button>
           </div>
         </div>
       </div>
