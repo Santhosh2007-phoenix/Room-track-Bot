@@ -10,6 +10,7 @@ import { body, query, validationResult } from 'express-validator';
 import crypto from 'node:crypto';
 import dgram from 'node:dgram';
 import multer from 'multer';
+import { sendVisitorAlert } from './services/notificationService.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -123,7 +124,7 @@ const searchAdmittedPatients = async (queryText) => {
   // Generate stems (e.g. 'veli' -> 'vel')
   const baseTerms = terms.map(t => t.length > 3 ? t.replace(/[iu]$/, '') : t);
 
-  let sql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
+  let sql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city, contact_reference FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
   const params = [];
   terms.forEach((t, idx) => {
     const base = baseTerms[idx];
@@ -162,7 +163,7 @@ const searchAdmittedPatients = async (queryText) => {
   }
 
   // 2. Phonetic Fallback (e.g. 'Santosh' -> 'SANTHOSH', 'Ramaswamy' -> 'RAMASAMY')
-  let phonSql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
+  let phonSql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city, contact_reference FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
   const phonParams = [];
   terms.forEach(t => {
     const norm = normalizePhonetic(t);
@@ -174,7 +175,7 @@ const searchAdmittedPatients = async (queryText) => {
   if (phonRows.length > 0) return phonRows;
 
   // 3. Fuzzy Levenshtein & Similarity Matching across all admitted patients
-  const allPatients = (await q("SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL")).rows;
+  const allPatients = (await q("SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city, contact_reference FROM patients WHERE status='Admitted' AND deleted_at IS NULL")).rows;
   
   let bestScore = -1;
   let bestPatient = null;
@@ -251,10 +252,14 @@ app.get('/api/visitor/search',rateLimit({windowMs:60000,limit:40}),asyncRoute(as
 }));
 app.post('/api/visitor/dispatch',rateLimit({windowMs:60000,limit:30}),asyncRoute(async(req,res)=>{
  const id=String(req.body?.id||'').trim();if(!id||id.length>100)return res.status(400).json({success:false,message:'Select a patient first'});
- const r=await q("SELECT id,COALESCE(patient_id,patient_code) AS patient_id,COALESCE(name,patient_name) AS name,floor,room,room_id,COALESCE(father_name,'') AS father_name,COALESCE(city,'') AS city FROM patients WHERE (LOWER(COALESCE(patient_id,patient_code))=LOWER($1) OR id::text=$1) AND status='Admitted' AND deleted_at IS NULL",[id]);const p=r.rows[0];
+ const r=await q("SELECT id,COALESCE(patient_id,patient_code) AS patient_id,COALESCE(name,patient_name) AS name,floor,room,room_id,COALESCE(father_name,'') AS father_name,COALESCE(city,'') AS city,contact_reference FROM patients WHERE (LOWER(COALESCE(patient_id,patient_code))=LOWER($1) OR id::text=$1) AND status='Admitted' AND deleted_at IS NULL",[id]);const p=r.rows[0];
  if(!p)return res.status(404).json({success:false,message:'Patient is no longer available. Please search again.'});
  await q('INSERT INTO dispatch_queue(patient_id,name,floor,room,father_name,city) VALUES($1,$2,$3,$4,$5,$6)',[p.patient_id,p.name,p.floor,p.room,p.father_name,p.city]);
  try{await q('INSERT INTO announcement_queue(patient_id,name,floor,room,room_id,status) VALUES($1,$2,$3,$4,$5,$6)',[p.patient_id,p.name,p.floor,p.room,p.room_id||null,'PENDING']);}catch(_){}
+ 
+ // Trigger Bilingual Attender Alert via Fast2SMS and WhatsApp (non-blocking)
+ sendVisitorAlert(p, 'Web Portal').catch(e => console.warn('[Notification Error]:', e.message));
+
  res.json({success:true,message:'Patient location sent to Room Track Bot'});
 }));
 app.get('/api/device/next-patient',deviceOnly,asyncRoute(async(req,res)=>{
@@ -344,6 +349,9 @@ app.post('/api/device/voice-search', deviceOnly, upload.single('audio'), asyncRo
     console.log(`[Voice Search] MATCH FOUND: ${patient.name} -> Floor: ${patient.floor}, Room: ${patient.room}`);
     await logSearch(true, null, patient.floor, patient.room);
     
+    // Trigger Bilingual Attender Alert via Fast2SMS and WhatsApp (non-blocking)
+    sendVisitorAlert(patient, 'Room Track Bot').catch(e => console.warn('[Notification Error]:', e.message));
+
     // Return result to ESP32 so it can trigger DFPlayer Mini
     res.json({
       success: true,
