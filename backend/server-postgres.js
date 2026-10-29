@@ -92,15 +92,39 @@ const searchAdmittedPatients = async (queryText) => {
   const terms = extractSearchTerms(queryText);
   if (!terms.length) return [];
 
-  // 1. Direct Term Match
+  // Generate stems (e.g. 'veli' -> 'vel')
+  const baseTerms = terms.map(t => t.length > 3 ? t.replace(/[iu]$/, '') : t);
+
   let sql = "SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL";
   const params = [];
-  terms.forEach(t => {
+  terms.forEach((t, idx) => {
+    const base = baseTerms[idx];
     params.push('%' + t + '%');
-    sql += " AND CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''), COALESCE(city,''), COALESCE(patient_id,patient_code)) ILIKE $" + params.length;
+    const p1 = params.length;
+    params.push('%' + base + '%');
+    const p2 = params.length;
+    sql += ` AND (CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''), COALESCE(city,''), COALESCE(patient_id,patient_code)) ILIKE $${p1} OR CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''), COALESCE(city,''), COALESCE(patient_id,patient_code)) ILIKE $${p2})`;
   });
-  params.push(queryText.trim());
-  sql += " ORDER BY CASE WHEN LOWER(CONCAT_WS(' ', COALESCE(name,patient_name), COALESCE(father_name,''))) = LOWER($" + params.length + ") THEN 1 WHEN LOWER(COALESCE(name,patient_name)) = LOWER($" + params.length + ") THEN 2 ELSE 3 END, created_at DESC LIMIT 10";
+
+  const rawClean = queryText.trim().toLowerCase();
+  const rawBase = baseTerms.join(' ');
+  params.push(rawClean);
+  const pClean = params.length;
+  params.push(rawBase);
+  const pBase = params.length;
+
+  sql += ` ORDER BY 
+    CASE 
+      WHEN LOWER(COALESCE(name,patient_name)) = $${pClean} THEN 1
+      WHEN LOWER(COALESCE(name,patient_name)) = $${pBase} THEN 2
+      WHEN LOWER(COALESCE(name,patient_name)) LIKE $${pBase} || '%' THEN 3
+      WHEN $${pClean} LIKE LOWER(COALESCE(name,patient_name)) || '%' THEN 4
+      WHEN LOWER(COALESCE(name,patient_name)) LIKE '%' || $${pBase} || '%' THEN 5
+      WHEN LOWER(COALESCE(father_name,'')) LIKE '%' || $${pBase} || '%' THEN 6
+      ELSE 7
+    END, 
+    created_at DESC LIMIT 10`;
+
   let rows = (await q(sql, params)).rows;
   if (rows.length > 0) return rows;
 
