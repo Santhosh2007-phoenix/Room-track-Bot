@@ -154,11 +154,18 @@ const searchAdmittedPatients = async (queryText) => {
     created_at DESC LIMIT 10`;
 
   let rows = (await q(sql, params)).rows;
-  // If top row matches the name directly, return it
+  // If any results match the patient's name directly, prioritize and return ONLY those name matches
+  // so extra keyword matches (like city 'Tirunelveli' matching 'vel') do not pollute the search results!
   if (rows.length > 0) {
-    const topName = (rows[0].name || '').toLowerCase();
-    const hasNameMatch = terms.some(t => topName.includes(t) || t.includes(topName) || stringSimilarity(t, topName) >= 0.7);
-    if (hasNameMatch) return rows;
+    const nameMatches = rows.filter(r => {
+      const pName = (r.name || '').toLowerCase();
+      return terms.some(t => {
+        const b = t.length > 3 ? t.replace(/[iu]$/, '') : t;
+        return pName === t || pName === b || pName.startsWith(b) || t.startsWith(pName) || pName.includes(b) || stringSimilarity(t, pName) >= 0.7;
+      });
+    });
+    if (nameMatches.length > 0) return nameMatches;
+    return rows;
   }
 
   // 2. Phonetic Fallback (e.g. 'Santosh' -> 'SANTHOSH', 'Ramaswamy' -> 'RAMASAMY')
@@ -171,7 +178,17 @@ const searchAdmittedPatients = async (queryText) => {
   });
   phonSql += " ORDER BY created_at DESC LIMIT 10";
   let phonRows = (await q(phonSql, phonParams)).rows;
-  if (phonRows.length > 0) return phonRows;
+  if (phonRows.length > 0) {
+    const phonNameMatches = phonRows.filter(r => {
+      const pName = (r.name || '').toLowerCase();
+      return terms.some(t => {
+        const b = t.length > 3 ? t.replace(/[iu]$/, '') : t;
+        return pName === t || pName === b || pName.startsWith(b) || t.startsWith(pName) || pName.includes(b) || stringSimilarity(t, pName) >= 0.7;
+      });
+    });
+    if (phonNameMatches.length > 0) return phonNameMatches;
+    return phonRows;
+  }
 
   // 3. Fuzzy Levenshtein & Similarity Matching across all admitted patients
   const allPatients = (await q("SELECT id, COALESCE(patient_id,patient_code) AS patient_id, COALESCE(name,patient_name) AS name, floor, room, room_id, COALESCE(father_name,'') AS father_name, COALESCE(city,'') AS city FROM patients WHERE status='Admitted' AND deleted_at IS NULL")).rows;
