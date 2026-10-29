@@ -1,0 +1,263 @@
+================================================================================
+                    ROOM TRACK BOT - COMPLETE PROJECT DOCUMENTATION
+                    TEAM QUANTROX (RYHATHON 2026 - RYH26-C25B1B)
+================================================================================
+
+1. PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+ROOM TRACK BOT is an AI-powered, touchless, multilingual indoor hospital navigation
+and patient tracking bot. It combines edge IoT hardware (ESP32), digital acoustic
+sensing (INMP441 I2S), Cloud Speech-to-Text AI (Groq Whisper), and cloud hospital
+records (Supabase PostgreSQL) to enable visitors to locate admitted patients simply
+by speaking naturally, with zero typing or English literacy required.
+
+
+2. TARGET USERS
+--------------------------------------------------------------------------------
+A. PRIMARY USERS: Hospital Visitors & Attenders
+   - Relatives, rural visitors, elderly individuals, and distressed family members.
+   - Pain points solved: Inability to read complex hospital signs, anxiety in large
+     multi-floor corridors, inability to type on touchscreen kiosks.
+
+B. SECONDARY USERS: Front-Desk, Helpdesk & Nursing Staff
+   - Receptionists, nurses, and hospital security personnel.
+   - Pain points solved: 40-60% of front-desk inquiries are repetitive questions
+     ("Where is Room 204?", "Where is Vel admitted?"). Frees hospital staff to focus
+     on emergency admissions and core clinical duties.
+
+C. TERTIARY USERS: Hospital Management & Administration
+   - Facility Directors in Government and Private Multi-specialty Hospitals.
+   - Pain points solved: Prevents reception corridor crowding, cuts kiosk capital
+     expenditure by 95%, and improves patient/visitor satisfaction (NABH/JCI metrics).
+
+
+3. MARKET SIZE & OPPORTUNITY
+--------------------------------------------------------------------------------
+- TAM (Total Addressable Market - Global):
+  Global Smart Hospital & Indoor Navigation market is projected to reach $5.2 Billion
+  by 2030 (growing at a CAGR of ~13.8%), driven by digital hospital transformation.
+
+- SAM (Serviceable Addressable Market - India):
+  India has over 70,000+ hospitals with ~1.9 million beds. More than 12,000+ facilities
+  are large multi-specialty or government district headquarters hospitals with
+  multi-story layouts. Estimated market size: Rs. 850+ Crores.
+
+- SOM (Serviceable Obtainable Market - South India & Tamil Nadu):
+  Targeting Tier-1 & Tier-2 hospitals, medical college hospitals, and nursing homes
+  in Tamil Nadu and South India (~1,800 facilities). Initial 3-year market potential:
+  Rs. 45 to 60 Crores.
+
+
+4. COMPETITOR ANALYSIS & EXISTING ALTERNATIVES
+--------------------------------------------------------------------------------
+1. Manual Help Desks / Reception Staff:
+   - Limitations: Recurring monthly salary expenses, long queues during visiting hours,
+     staff fatigue, and unavailable 24/7.
+
+2. Commercial Touchscreen Kiosks (e.g., Purple Wayfinding, LogicJunction):
+   - Limitations: Touchscreens harbor germs and viruses (high nosocomial cross-infection
+     risk in hospitals). Requires English typing literacy; rural and elderly visitors
+     struggle with on-screen keyboards. High cost (Rs. 1,50,000 to Rs. 4,00,000 per kiosk).
+
+3. Indoor Beacon / Smartphone Apps (e.g., Pointr, Steerpath):
+   - Limitations: Requires visitors to download an app and turn on Bluetooth. Over 90%
+     of visitors refuse to download an app just for a 20-minute visit.
+
+4. Static Directional Boards & Printed Floor Maps:
+   - Limitations: Confusing, cannot update dynamically when patients are moved or discharged.
+
+
+5. HOW OUR SOLUTION IS DIFFERENT (KEY ADVANTAGES)
+--------------------------------------------------------------------------------
++-------------------+--------------------+--------------------+-----------------------+
+| Feature           | Touchscreen Kiosk  | Mobile App         | ROOM TRACK BOT        |
++-------------------+--------------------+--------------------+-----------------------+
+| Input Method      | Screen Typing (EN) | App UI / Search    | Voice-First (Natural) |
+| Literacy Needed   | High (Typing)      | High (Smartphone)  | Zero (Audio-Driven)   |
+| Languages         | English Only       | English Only       | Bilingual (TA + EN)   |
+| Infection Safety  | Poor (Touchscreen) | Good (Own Phone)   | Touchless Ultrasonic  |
+| Hardware Cost     | Rs. 1.5L - 4 Lakhs | Beacon Infra       | < Rs. 4,000 (~95% OFF)|
+| Real-time DB Sync | Periodic CSV batch | App Backend        | Live Supabase Postgre |
+| Attender Alerts   | None               | None               | SMS + WhatsApp Alerts |
+| Visual Guidance   | Static arrow       | Smartphone 3D Map  | LCD + 2D Floor Plan   |
++-------------------+--------------------+--------------------+-----------------------+
+
+
+6. SYSTEM ARCHITECTURE & BLOCK DIAGRAM
+--------------------------------------------------------------------------------
++-----------------------------------------------------------------------------+
+|                            VISITOR INTERACTION                              |
+|           Approaches (< 40cm) ---> Presses Button ---> Speaks Name          |
++-----------------------------------------------------------------------------+
+                                      |
+                                      v
++-----------------------------------------------------------------------------+
+|                          EDGE HARDWARE UNIT (ESP32)                         |
+|  - HC-SR04 Ultrasonic Sensor  (TRIG: GPIO 5, ECHO: GPIO 18)                 |
+|  - Push Button                (GPIO 23 with internal PULLUP)                |
+|  - INMP441 I2S Digital Mic    (SCK: 14, WS: 15, SD: 32)                     |
+|  - Status Indicator LED       (Green LED: GPIO 4)                           |
+|  - 16x2 LCD Display           (I2C: SDA 21, SCL 22 - Addr 0x27)             |
+|  - DFPlayer Mini MP3 Player   (HardwareSerial 2: RX 16, TX 17)              |
+|  - 2W 8-Ohm Speaker           (English + Tamil Location Announcements)      |
++-----------------------------------------------------------------------------+
+                                      |
+                         Wi-Fi HTTP (WAV Stream)
+                         UDP Beacon (Port 4001/4002)
+                                      v
++-----------------------------------------------------------------------------+
+|                     BACKEND SERVER (Node.js & Express)                      |
+|  - Zero-Config UDP Auto-Discovery Responder                                 |
+|  - PCM Audio Peak Volume & Silence Filter (peak >= 150)                     |
+|  - Dynamic Database Vocabulary Conditioning Generator                       |
+|  - Multi-Token Fuzzy Search (Levenshtein Distance + Phonetic Fallback)      |
+|  - Web Dispatch Queue Engine                                                |
++-----------------------------------------------------------------------------+
+               |                                              |
+      HTTPS REST API                                 TCP/SSL Connection Pool
+               v                                              v
++-----------------------------+               +-------------------------------+
+|     CLOUD AI SERVICE        |               |        CLOUD DATABASE         |
+|   Groq Cloud Whisper AI     |               |    Supabase PostgreSQL        |
+|  (whisper-large-v3 Model)   |               |   - Admitted Patients         |
+|  Sub-second speech-to-text  |               |   - Floors & Rooms Data       |
+|  with vocabulary biasing    |               |   - Search Audit History      |
++-----------------------------+               +-------------------------------+
+                                                              |
+                                                              v
++-------------------------------------+       +-------------------------------+
+|         ATTENDER NOTIFICATION       |       |       FRONTEND CLIENTS        |
+|   - Fast2SMS Gateway (SMS alert)    |       |   - Visitor 2D Floor Wayfinder|
+|   - CallMeBot Gateway (WhatsApp)    |       |   - Hospital Admin Dashboard  |
++-------------------------------------+       +-------------------------------+
+
+
+7. COMPLETE TECH STACK
+--------------------------------------------------------------------------------
+- Edge Controller:      ESP32-D0WD-V3 (Dual Core 240MHz, Wi-Fi 802.11 b/g/n)
+- Firmware Environment: C++ / Arduino IDE 2.x, driver/i2s.h, ArduinoJson v7
+- Acoustic Sensor:      INMP441 MEMS Omnidirectional Digital I2S Microphone
+- Proximity Sensor:     HC-SR04 Ultrasonic Transducer (2cm - 400cm range)
+- Audio Synthesizer:    DFPlayer Mini Hardware MP3 Decoder + 24-bit DAC
+- Display Interface:    LCD 1602 with PCF8574 I2C Backpack
+- Backend Server:       Node.js (v20+), Express.js REST API
+- Auto-Discovery:       UDP Broadcast Beacon (Port 4001/4002 via Node dgram)
+- Cloud Speech-to-Text: Groq Cloud Whisper API (model: whisper-large-v3)
+- Primary Database:     Supabase Cloud Managed PostgreSQL (PgPool)
+- Local Fallback DB:    SQLite3 (better-sqlite3)
+- Frontend Web:         React 18, TypeScript, Vite 5, Tailwind CSS
+- Wayfinding Engine:    Interactive 2D SVG Blueprint with animated walking trail
+- Messaging Gateways:   Fast2SMS Quick Route & CallMeBot WhatsApp Gateway
+
+
+8. HARDWARE PIN CONFIGURATION
+--------------------------------------------------------------------------------
+Component           ESP32 Pin     Connection Details
+--------------------------------------------------------------------------------
+HC-SR04 TRIG        GPIO 5        Direct Digital Output
+HC-SR04 ECHO        GPIO 18       Voltage Divider (1k / 2k resistors to protect 3.3V)
+INMP441 SCK (BCLK)  GPIO 14       I2S Bit Clock
+INMP441 WS (LRCK)   GPIO 15       I2S Word Select / Left-Right Clock
+INMP441 SD (DIN)    GPIO 32       I2S Serial Data Input
+INMP441 L/R         GND           Left Channel Selection
+INMP441 VDD         3.3V          3.3V Power ONLY (Do not connect to 5V!)
+LCD 16x2 SDA        GPIO 21       I2C Data line (Address 0x27)
+LCD 16x2 SCL        GPIO 22       I2C Clock line
+DFPlayer Mini RX    GPIO 17       ESP32 TX2 via 1k ohm resistor
+DFPlayer Mini TX    GPIO 16       ESP32 RX2 direct connection
+Status Green LED    GPIO 4        Anode via 220/330 ohm resistor, Cathode to GND
+Push Button         GPIO 23       One pin to GPIO 23, other pin to GND (INPUT_PULLUP)
+VCC / VIN           5V Power      From USB / External 5V 2A Power Supply
+GND                 Common GND    All module GND pins tied together
+
+
+9. END-TO-END DATA FLOW
+--------------------------------------------------------------------------------
+1. Detection: Visitor approaches within 40 cm. HC-SR04 ultrasonic confirms visitor
+   presence for 500 ms.
+2. Welcome: LCD displays "Welcome to Room Track Bot". DFPlayer Mini plays Track 1
+   (Welcome voice message).
+3. Prompt: LCD prompts "Press Button To Speak Name...".
+4. User Action: Visitor presses Push Button (GPIO 23).
+5. Audio Capture:
+   - Green LED turns ON instantly.
+   - I2S DMA buffer is flushed.
+   - INMP441 records 3 seconds of 16-bit PCM audio (48,000 samples @ 16 kHz).
+   - Stereo channel auto-picker selects live mic signal per sample.
+   - Green LED turns OFF; LCD displays "Searching... Processing Voice".
+6. Audio Transmission:
+   - ESP32 builds standard 44-byte RIFF WAV header + 96,000 bytes PCM payload.
+   - Streams multipart HTTP POST request to /api/device/voice-search.
+7. Backend AI Processing:
+   - Buffer amplitude validation: Checks PCM peak level (must be >= 150).
+   - Dynamic prompt generation: Queries active admitted patients and generates
+     custom STT biasing prompt ("Hospital admitted patients: Vel, Santhosh...").
+   - Dispatches audio to Groq Whisper Cloud (whisper-large-v3).
+   - Cleans response and filters silence hallucinations.
+8. Database Search:
+   - Multi-token fuzzy search in Supabase PostgreSQL against patient name,
+     father's name, and city.
+9. Announcements & Attender Alert:
+   - IF FOUND:
+     * LCD displays: "VEL / 2F Room:203"
+     * Speaker announces: English ("Second Floor, Room 203") + Tamil ("இரண்டாம் தளம், அறை எண் 203").
+     * Backend triggers Fast2SMS and WhatsApp alert to the patient's relative.
+     * LCD displays "Thank You / Take Care", waits 6 seconds, and resets to Standby.
+   - IF NOT FOUND:
+     * LCD displays: "Patient Not Found".
+     * Speaker plays Track 7 (Not Found prompt).
+     * System immediately loops back to "Press Button To Try Again...".
+
+
+10. INTER-COMPONENT COMMUNICATION PROTOCOLS
+--------------------------------------------------------------------------------
+A. INMP441 to ESP32:
+   - Digital I2S protocol using DMA channels.
+   - 32-bit slot stereo stream @ 16,000 Hz, scaled to 16-bit PCM with >> 12 gain.
+
+B. DFPlayer Mini to ESP32:
+   - UART serial communication via HardwareSerial 2 at 9600 baud, 8N1.
+   - Frame command: 0x7E 0xFF 0x06 0x12 0x00 [TrackHigh] [TrackLow] 0xEF.
+
+C. LCD Display to ESP32:
+   - I2C bus protocol at address 0x27 (standard 100 kHz speed).
+
+D. ESP32 to Backend Server:
+   - Zero-configuration UDP Broadcast Beacon:
+     * ESP32 sends "DISCOVER_ROOM_TRACK_BOT" on UDP port 4001.
+     * Server replies "RTB_SERVER_ACK" on UDP port 4002.
+     * ESP32 auto-configures the server's IP address dynamically.
+   - HTTP Multipart POST:
+     * Endpoint: POST /api/device/voice-search
+     * Authentication: X-API-Key header
+     * Content-Type: multipart/form-data; boundary=----ESP32Boundary...
+   - HTTP Status Polling:
+     * POST /api/device/heartbeat every 5 seconds.
+     * GET /api/device/next-patient every 2 seconds for website dispatches.
+
+E. Backend to Groq Whisper Cloud:
+   - HTTPS REST API call to https://api.groq.com/openai/v1/audio/transcriptions.
+   - Model: whisper-large-v3 with Bearer token authentication.
+
+F. Backend to Supabase PostgreSQL:
+   - Encrypted PostgreSQL Wire Protocol (TCP over SSL) via Node 'pg' Pool.
+   - Parameterized queries with sub-10ms response time.
+
+G. Backend to Attender Gateways:
+   - HTTPS REST calls to Fast2SMS and CallMeBot WhatsApp API.
+
+
+11. HARDWARE STATE MACHINE
+--------------------------------------------------------------------------------
+State                       Condition                       Action
+--------------------------------------------------------------------------------
+STATE_STANDBY               Power on / Cooldown done        Ultrasonic pinging; LCD: "Step Forward"
+STATE_CONFIRMING_PERSON     Distance < 40 cm for 500 ms     Confirms visitor presence
+STATE_WAITING_FOR_BUTTON    Confirmation complete / Retry   Plays Track 1; LCD: "Press Button"
+STATE_RECORDING             Button pressed (GPIO 23)        Green LED ON; records 3s @ 16 kHz
+STATE_PROCESSING            3s recording complete           Green LED OFF; streams audio to backend
+--------------------------------------------------------------------------------
+
+================================================================================
+                    END OF DOCUMENTATION - TEAM QUANTROX
+================================================================================
