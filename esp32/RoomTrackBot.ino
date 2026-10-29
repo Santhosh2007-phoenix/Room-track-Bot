@@ -1,29 +1,34 @@
 /*
   =============================================================================
-  ROOM TRACK BOT - Complete ESP32 Firmware (Direct Port 4000 High-Speed Setup)
+  ROOM TRACK BOT - Complete ESP32 Firmware with INMP441 Voice Recognition
   =============================================================================
   Features:
-  1. PERSON DETECTION:
-     - Ultrasonic sensor detects person (< 40cm) continuously for 500ms.
-     - LCD displays "Person Detected", then "Welcome! Send Name on BT" + voice greeting.
-  2. BLUETOOTH TERMINAL SEARCH:
-     - Connect via "Serial Bluetooth Terminal" app to "Room_Track_Bot".
-     - Type patient name -> searches Supabase database instantly via local Express server!
-     - Found: Displays on LCD + Speaks Floor & Room (English & Tamil) for 3s.
-     - Displays "Thank You!" and "Next person soon" for 3s.
-     - Not Found: Displays "Patient Not Found", allows another name.
-  3. WEBSITE VISITOR SYNC:
-     - When someone clicks "SEND TO ROOM TRACK BOT" on phone website,
-       ESP32 receives it, shows on LCD, and announces in voice!
-  4. DIRECT EXPRESS PORT 4000:
-     - Bypasses Vite dev proxy directly to Node backend on Port 4000 -> 100% reliable!
+  1. TOUCHLESS PROXIMITY DETECTION:
+     - HC-SR04 Ultrasonic sensor detects visitor approaching (< 40cm) for 500ms.
+     - Automatically triggers voice prompt: "Please Speak Name".
+  2. INMP441 DIGITAL I2S VOICE RECORDING:
+     - 24-bit/32-bit I2S audio sampled at 16,000 Hz, converted to 16-bit mono WAV.
+     - Records 3 seconds of crystal-clear digital speech.
+  3. AI SPEECH-TO-TEXT & SEARCH (Groq Whisper + PostgreSQL):
+     - Sends WAV audio to backend Express server: POST /api/device/voice-search.
+     - Recognizes single name (e.g. "Santhosh") or combined name + father/city 
+       (e.g. "Santhosh Ramasamy", "Santhosh son of Ramasamy").
+  4. BILINGUAL VOICE & VISUAL GUIDANCE:
+     - LCD displays Patient Name, Floor and Room.
+     - DFPlayer Mini announces in English & Tamil.
+  5. WEBSITE VISITOR SYNC:
+     - Polls /api/device/next-patient for dispatches from the staff/visitor website.
 
   Pin Setup:
-  - LCD I2C: SDA -> GPIO 21, SCL -> GPIO 22 (Address: 0x27)
-  - Ultrasonic: TRIG -> GPIO 5, ECHO -> GPIO 18 (via voltage divider)
+  - LCD I2C:       SDA -> GPIO 21, SCL -> GPIO 22 (Address: 0x27)
+  - Ultrasonic:    TRIG -> GPIO 5, ECHO -> GPIO 18 (via 1k/2k voltage divider)
   - DFPlayer Mini: RX -> GPIO 16, TX -> GPIO 17 (via 1k resistor)
-  - Bluetooth: Built-in ESP32 (Name: "Room_Track_Bot")
-  - GND: Common Ground
+  - INMP441 Mic:   SCK (BCLK) -> GPIO 14
+                   WS (LRCK)  -> GPIO 15
+                   SD (DIN)   -> GPIO 32
+                   L/R        -> GND (Left channel mono)
+                   VDD        -> 3.3V ONLY
+                   GND        -> GND
   =============================================================================
 */
 
@@ -36,20 +41,15 @@
 #include <LiquidCrystal_I2C.h>
 #include <DFRobotDFPlayerMini.h>
 #include <HardwareSerial.h>
-#include "BluetoothSerial.h"
+#include <driver/i2s.h>
 
-#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#error Bluetooth is not enabled! Please check your board settings.
-#endif
-
-BluetoothSerial SerialBT;
 WiFiUDP udpDiscovery;
 
 // ======================== WI-FI CONFIGURATION ========================
 const char* WIFI_SSID     = "Santhosh 15";    // Hotspot SSID
 const char* WIFI_PASSWORD = "0987654321";   // Hotspot Password
 
-// Dynamic Backend API (Auto-Discovered over UDP on Port 4001, fallback to current IP)
+// Dynamic Backend API (Auto-Discovered over UDP on Port 4001, fallback to LAN IP)
 String API_BASE          = "http://10.98.247.79:4000/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
@@ -59,35 +59,125 @@ static const int ECHO_PIN  = 18;
 static const int DF_RX_PIN = 16; // ESP32 RX (connect to DFPlayer TX)
 static const int DF_TX_PIN = 17; // ESP32 TX (connect to DFPlayer RX via 1k resistor)
 
+// INMP441 I2S Pins
+#define I2S_PORT        I2S_NUM_0
+#define I2S_SCK_PIN     14  // BCLK / Serial Clock
+#define I2S_WS_PIN      15  // LRCK / Word Select
+#define I2S_SD_PIN      32  // DIN / Serial Data
+
+// Audio Recording Specs
+#define SAMPLE_RATE     16000
+#define RECORD_SECONDS  3
+#define NUM_SAMPLES     (SAMPLE_RATE * RECORD_SECONDS) // 48,000 samples
+#define WAV_DATA_SIZE   (NUM_SAMPLES * sizeof(int16_t)) // 96,000 bytes
+#define WAV_HEADER_SIZE 44
+#define TOTAL_WAV_SIZE  (WAV_HEADER_SIZE + WAV_DATA_SIZE)
+
 static const uint8_t LCD_ADDR = 0x27;
-static const int DF_VOLUME = 20; // Max volume (0 to 30)
+static const int DF_VOLUME    = 22; // Volume (0 to 30)
 
 // Workflow Timing Constants
 static const unsigned long POLL_INTERVAL_MS      = 2000;  // Poll website every 2s
 static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;  // Heartbeat every 5s
-static const unsigned long IDLE_TIMEOUT_MS       = 20000; // Idle reset after 20s
-static const unsigned long COOLDOWN_DURATION_MS  = 5000;  // 5-second cooldown
-static const unsigned long HTTP_TIMEOUT_MS       = 8000;  // 8s timeout for cloud requests
+static const unsigned long COOLDOWN_DURATION_MS  = 6000;  // 6s cooldown after response
+static const unsigned long HTTP_TIMEOUT_MS       = 10000; // 10s timeout for voice STT
 
 LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
 HardwareSerial dfSerial(2);
 DFRobotDFPlayerMini player;
 
 bool playerReady = false;
+bool i2sReady = false;
 unsigned long lastPoll = 0;
 unsigned long lastHeartbeat = 0;
-unsigned long lastActivityTime = 0;
 unsigned long cooldownEndTime = 0;
 
 // State Machine
 enum BotState {
   STATE_STANDBY,
   STATE_CONFIRMING_PERSON,
-  STATE_AWAITING_INPUT
+  STATE_RECORDING,
+  STATE_PROCESSING
 };
 
 BotState currentState = STATE_STANDBY;
 unsigned long personDetectionStart = 0;
+
+// ======================== I2S INITIALIZATION ========================
+void initI2S() {
+  i2s_config_t i2s_config = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+    .sample_rate = SAMPLE_RATE,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT, // INMP441 outputs 24-bit in 32-bit slot
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_STAND_I2S),
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 4,
+    .dma_buf_len = 512,
+    .use_apll = false,
+    .tx_desc_auto_clear = false,
+    .fixed_mclk = 0
+  };
+
+  i2s_pin_config_t pin_config = {
+    .bck_io_num = I2S_SCK_PIN,
+    .ws_io_num = I2S_WS_PIN,
+    .data_out_num = I2S_PIN_NO_CHANGE,
+    .data_in_num = I2S_SD_PIN
+  };
+
+  esp_err_t err = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+  if (err != ESP_OK) {
+    Serial.printf("ERROR: Failed to install I2S driver: %d\n", err);
+    return;
+  }
+
+  err = i2s_set_pin(I2S_PORT, &pin_config);
+  if (err != ESP_OK) {
+    Serial.printf("ERROR: Failed to set I2S pins: %d\n", err);
+    return;
+  }
+
+  i2sReady = true;
+  Serial.println(">>> INMP441 I2S Microphone Ready!");
+}
+
+// Generate Standard 44-byte WAV Header
+void createWavHeader(byte* header, int totalDataLen) {
+  int totalFileLen = totalDataLen + 36;
+  int byteRate = SAMPLE_RATE * 1 * sizeof(int16_t); // 16000 * 1 channel * 2 bytes = 32000
+
+  // RIFF Chunk Descriptor
+  header[0] = 'R'; header[1] = 'I'; header[2] = 'F'; header[3] = 'F';
+  header[4] = (byte)(totalFileLen & 0xff);
+  header[5] = (byte)((totalFileLen >> 8) & 0xff);
+  header[6] = (byte)((totalFileLen >> 16) & 0xff);
+  header[7] = (byte)((totalFileLen >> 24) & 0xff);
+  header[8] = 'W'; header[9] = 'A'; header[10] = 'V'; header[11] = 'E';
+
+  // "fmt " Sub-chunk
+  header[12] = 'f'; header[13] = 'm'; header[14] = 't'; header[15] = ' ';
+  header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0; // Subchunk1Size (16 for PCM)
+  header[20] = 1; header[21] = 0; // AudioFormat (1 = PCM)
+  header[22] = 1; header[23] = 0; // NumChannels (1 = Mono)
+  header[24] = (byte)(SAMPLE_RATE & 0xff);
+  header[25] = (byte)((SAMPLE_RATE >> 8) & 0xff);
+  header[26] = (byte)((SAMPLE_RATE >> 16) & 0xff);
+  header[27] = (byte)((SAMPLE_RATE >> 24) & 0xff);
+  header[28] = (byte)(byteRate & 0xff);
+  header[29] = (byte)((byteRate >> 8) & 0xff);
+  header[30] = (byte)((byteRate >> 16) & 0xff);
+  header[31] = (byte)((byteRate >> 24) & 0xff);
+  header[32] = 2; header[33] = 0; // BlockAlign (channels * bits/sample / 8)
+  header[34] = 16; header[35] = 0; // BitsPerSample (16 bits)
+
+  // "data" Sub-chunk
+  header[36] = 'd'; header[37] = 'a'; header[38] = 't'; header[39] = 'a';
+  header[40] = (byte)(totalDataLen & 0xff);
+  header[41] = (byte)((totalDataLen >> 8) & 0xff);
+  header[42] = (byte)((totalDataLen >> 16) & 0xff);
+  header[43] = (byte)((totalDataLen >> 24) & 0xff);
+}
 
 // ======================== HELPER FUNCTIONS ========================
 String lcdSafe(String s, size_t n = 16) {
@@ -107,16 +197,15 @@ void showLCD(String a, String b) {
 
 void setStandbyScreen() {
   currentState = STATE_STANDBY;
-  showLCD("Room Track Bot", "BT: Ready");
-  lastActivityTime = millis();
+  showLCD("Room Track Bot", "Step Forward");
 }
 
 unsigned long getTrackDuration(uint16_t t) {
   switch (t) {
-    case 1:  return 5112; // Welcome English: "Welcome to Room Track Bot. Please send person name on Bluetooth."
-    case 2:  return 5904; // Welcome Tamil: "ரூம் ட்ராக் பாட்டிற்கு நல்வரவு. நபரின் பெயரை ப்ளூடூத்தில் அனுப்பவும்."
+    case 1:  return 4200; // Welcome English: "Please speak patient name"
+    case 2:  return 4500; // Welcome Tamil: "தயவுசெய்து நபரின் பெயரை கூறவும்"
     case 5:  return 2856; // Thank you English
-    case 7:  return 4440; // Person not found Tamil
+    case 7:  return 3800; // Person not found Tamil
 
     case 10: return 1224; // First Floor English
     case 11: return 1272; // Second Floor English
@@ -134,68 +223,6 @@ unsigned long getTrackDuration(uint16_t t) {
 
     case 40: return 1128; // Arai En Tamil
 
-    // English Room Numbers (101 - 505)
-    case 101: return 1344;
-    case 102: return 1296;
-    case 103: return 1368;
-    case 104: return 1392;
-    case 105: return 1416;
-
-    case 201: return 1296;
-    case 202: return 1272;
-    case 203: return 1344;
-    case 204: return 1344;
-    case 205: return 1368;
-
-    case 301: return 1392;
-    case 302: return 1368;
-    case 303: return 1440;
-    case 304: return 1440;
-    case 305: return 1488;
-
-    case 401: return 1440;
-    case 402: return 1416;
-    case 403: return 1488;
-    case 404: return 1488;
-    case 405: return 1536;
-
-    case 501: return 1512;
-    case 502: return 1464;
-    case 503: return 1536;
-    case 504: return 1536;
-    case 505: return 1560;
-
-    // Tamil Room Numbers (1101 - 1505)
-    case 1101: return 1584;
-    case 1102: return 1800;
-    case 1103: return 1800;
-    case 1104: return 1848;
-    case 1105: return 1824;
-
-    case 1201: return 1776;
-    case 1202: return 1992;
-    case 1203: return 1944;
-    case 1204: return 1968;
-    case 1205: return 2016;
-
-    case 1301: return 1728;
-    case 1302: return 1920;
-    case 1303: return 1896;
-    case 1304: return 1920;
-    case 1305: return 1920;
-
-    case 1401: return 1824;
-    case 1402: return 2016;
-    case 1403: return 1992;
-    case 1404: return 2040;
-    case 1405: return 2040;
-
-    case 1501: return 1776;
-    case 1502: return 1920;
-    case 1503: return 1920;
-    case 1504: return 1968;
-    case 1505: return 1944;
-
     default:
       if (t >= 101 && t <= 505) return 1500;
       if (t >= 1101 && t <= 1505) return 2000;
@@ -205,19 +232,14 @@ unsigned long getTrackDuration(uint16_t t) {
 
 void playTrack(uint16_t t) {
   if (!playerReady) {
-    Serial.println("ERROR: DFPlayer not ready!");
+    Serial.println("WARN: DFPlayer not ready!");
     return;
   }
 
   unsigned long duration = getTrackDuration(t);
-
-  Serial.printf("Playing track %04d for %lu ms\n",
-                t, duration);
-
+  Serial.printf("Playing track %04d for %lu ms\n", t, duration);
   player.playMp3Folder(t);
-
-  // Wait until the audio duration plus 200 ms safety margin
-  delay(duration + 200);
+  delay(duration + 150);
 }
 
 int digitTrack(char c, bool tamil) {
@@ -239,22 +261,22 @@ void announceLocation(String floor, String room) {
   int f = floorIndex(floor);
   int roomNum = room.toInt();
 
-  // 1. English: Second Floor, Room Number, Two not one
+  // 1. English Announcement
   playTrack(10 + f);
   playTrack(20);
   if (roomNum >= 101 && roomNum <= 505) {
-    playTrack(roomNum); // Plays e.g. 0201.mp3
+    playTrack(roomNum);
   } else {
     for (size_t i = 0; i < room.length(); i++) {
       if (isDigit(room[i])) playTrack(digitTrack(room[i], false));
     }
   }
 
-  // 2. Tamil: இரண்டாம் தளம், அறை எண், இருநூற்று ஒன்று
+  // 2. Tamil Announcement
   playTrack(30 + f);
   playTrack(40);
   if (roomNum >= 101 && roomNum <= 505) {
-    playTrack(1000 + roomNum); // Plays e.g. 1201.mp3
+    playTrack(1000 + roomNum);
   } else {
     for (size_t i = 0; i < room.length(); i++) {
       if (isDigit(room[i])) playTrack(digitTrack(room[i], true));
@@ -272,20 +294,18 @@ void handlePatientFound(JsonObject p) {
 
   Serial.println(">>> Patient Found: " + name + (father.length() > 0 ? " (S/O " + father + ")" : "") + (city.length() > 0 ? " [" + city + "]" : "") + " | Floor: " + floor + " | Room: " + room);
   
-  // Show result for 3 seconds
+  // Display result on LCD
   showLCD(name, floor + " Room:" + room);
   announceLocation(floor, room);
-  delay(3000);
+  delay(2500);
 
-  // Display 'Thank You!' and 'Next person soon' for 3 seconds
-  showLCD("Thank You!", "Next person soon");
+  // Thank You screen
+  showLCD("Thank You!", "Take Care");
   playTrack(5); // 0005.mp3: Thank you
-  delay(3000);
+  delay(2000);
 
-  // 5-second cooldown
+  // Set cooldown to allow visitor to leave
   cooldownEndTime = millis() + COOLDOWN_DURATION_MS;
-  
-  // Return to standby screen
   setStandbyScreen();
 }
 
@@ -297,143 +317,143 @@ long getDistanceCm() {
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  long duration = pulseIn(ECHO_PIN, HIGH, 25000);
   if (duration == 0) return 999;
   return (duration * 0.034) / 2;
 }
 
-String urlEncode(String str) {
-  String encoded = "";
-  for (size_t i = 0; i < str.length(); i++) {
-    char c = str.charAt(i);
-    if (isalnum(c)) {
-      encoded += c;
-    } else if (c == ' ') {
-      encoded += "%20";
-    } else {
-      char buf[4];
-      sprintf(buf, "%%%02X", c);
-      encoded += buf;
+// ======================== VOICE RECORDING & SEARCH ========================
+void recordAndSearchVoice() {
+  if (!i2sReady) {
+    Serial.println("ERROR: I2S is not initialized!");
+    showLCD("Mic Error", "Not Configured");
+    delay(2000);
+    setStandbyScreen();
+    return;
+  }
+
+  showLCD("Please Speak...", "Listening (3s)");
+  Serial.println("\n[Voice Recording] Listening for 3 seconds...");
+
+  // Allocate audio buffer for 16-bit PCM samples
+  int16_t* audioBuffer = (int16_t*) malloc(WAV_DATA_SIZE);
+  if (!audioBuffer) {
+    Serial.println("ERROR: Not enough memory for audio buffer!");
+    showLCD("Memory Error", "Out of RAM");
+    delay(2000);
+    setStandbyScreen();
+    return;
+  }
+
+  // Record 32-bit samples from INMP441, convert to 16-bit
+  size_t bytesRead = 0;
+  int samplesRecorded = 0;
+  const int CHUNK_SAMPLES = 256;
+  int32_t chunk32[CHUNK_SAMPLES];
+
+  unsigned long recordStart = millis();
+  while (samplesRecorded < NUM_SAMPLES) {
+    i2s_read(I2S_PORT, chunk32, CHUNK_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
+    int readSamples = bytesRead / sizeof(int32_t);
+
+    for (int i = 0; i < readSamples && samplesRecorded < NUM_SAMPLES; i++) {
+      // INMP441 sends 24-bit audio in upper bits of 32-bit word.
+      // Shift right by 14 to convert to 16-bit with clean audible volume.
+      audioBuffer[samplesRecorded++] = (int16_t)(chunk32[i] >> 14);
     }
   }
-  return encoded;
-}
 
-// Search Patient
-void searchPatient(String patientName) {
-  patientName.trim();
-  if (patientName.length() == 0) return;
+  unsigned long recordDuration = millis() - recordStart;
+  Serial.printf(">>> Recorded %d samples in %lu ms!\n", samplesRecorded, recordDuration);
 
-  lastActivityTime = millis();
-  Serial.println("Searching Patient: " + patientName);
-  SerialBT.println("Searching for: " + patientName + "...");
+  showLCD("Searching...", "Processing Voice");
 
-  showLCD("Searching...", patientName);
-
+  // Transmit WAV audio via HTTP POST to /api/device/voice-search
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
     WiFiClientSecure secureClient;
     HTTPClient http;
     http.setTimeout(HTTP_TIMEOUT_MS);
-    String url = String(API_BASE) + "/visitor/search?name=" + urlEncode(patientName);
 
-    bool begun = false;
-    if (url.startsWith("https://")) {
-      secureClient.setInsecure();
-      begun = http.begin(secureClient, url);
-    } else {
-      begun = http.begin(client, url);
-    }
+    String url = String(API_BASE) + "/device/voice-search";
+    bool begun = url.startsWith("https://") ? (secureClient.setInsecure(), http.begin(secureClient, url)) : http.begin(client, url);
 
     if (begun) {
-      int httpCode = http.GET();
+      String boundary = "----ESP32Boundary" + String(millis());
+      String head = "--" + boundary + "\r\n" +
+                    "Content-Disposition: form-data; name=\"audio\"; filename=\"audio.wav\"\r\n" +
+                    "Content-Type: audio/wav\r\n\r\n";
+      String tail = "\r\n--" + boundary + "--\r\n";
+
+      byte wavHeader[WAV_HEADER_SIZE];
+      createWavHeader(wavHeader, WAV_DATA_SIZE);
+
+      int totalPayloadSize = head.length() + WAV_HEADER_SIZE + WAV_DATA_SIZE + tail.length();
+
+      http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+      http.addHeader("X-API-Key", API_KEY);
+      http.addHeader("Content-Length", String(totalPayloadSize));
+
+      // Stream the payload directly to the network
+      WiFiClient* stream = http.getStreamPtr();
+      int httpCode = http.sendRequest("POST", [head, &wavHeader, audioBuffer, tail](WiFiClient* s) {
+        s->print(head);
+        s->write(wavHeader, WAV_HEADER_SIZE);
+        s->write((uint8_t*)audioBuffer, WAV_DATA_SIZE);
+        s->print(tail);
+      }, totalPayloadSize);
+
       if (httpCode == 200) {
         String res = http.getString();
-        Serial.println("Search Response: " + res);
+        Serial.println("Voice Search Response: " + res);
 
         JsonDocument doc;
         if (deserializeJson(doc, res) == DeserializationError::Ok) {
-          if ((bool)(doc["found"] | false)) {
+          if ((bool)(doc["success"] | false)) {
             JsonObject p = doc["patient"].as<JsonObject>();
-            String pName = String((const char*)(p["name"] | ""));
-            String pFloor = String((const char*)(p["floor"] | ""));
-            String pRoom = String((const char*)(p["room"] | ""));
-            String pFather = String((const char*)(p["father_name"] | ""));
-            String pCity = String((const char*)(p["city"] | ""));
-
-            if (doc["patients"].is<JsonArray>() && doc["patients"].as<JsonArray>().size() > 1) {
-              JsonArray pts = doc["patients"].as<JsonArray>();
-              SerialBT.println("================================");
-              SerialBT.println(">>> " + String(pts.size()) + " MATCHES FOUND:");
-              for (size_t i = 0; i < pts.size(); i++) {
-                JsonObject item = pts[i].as<JsonObject>();
-                String itName = String((const char*)(item["name"] | ""));
-                String itFather = String((const char*)(item["father_name"] | ""));
-                String itCity = String((const char*)(item["city"] | ""));
-                String itFloor = String((const char*)(item["floor"] | ""));
-                String itRoom = String((const char*)(item["room"] | ""));
-                String line = String(i + 1) + ". " + itName;
-                if (itFather.length() > 0) line += " (S/O " + itFather + ")";
-                if (itCity.length() > 0) line += " [" + itCity + "]";
-                line += " -> " + itFloor + " Room " + itRoom;
-                SerialBT.println(line);
-              }
-              SerialBT.println("================================");
-            } else {
-              SerialBT.println("================================");
-              SerialBT.println(">>> PERSON FOUND!");
-              SerialBT.println("Name         : " + pName);
-              if (pFather.length() > 0) SerialBT.println("Father/Spouse: " + pFather);
-              if (pCity.length() > 0)   SerialBT.println("City/Village : " + pCity);
-              SerialBT.println("Floor        : " + pFloor);
-              SerialBT.println("Room         : " + pRoom);
-              SerialBT.println("================================");
-            }
-
+            String heardName = String((const char*)(doc["transcribed_name"] | ""));
+            Serial.println("Whisper Understood: " + heardName);
             handlePatientFound(p);
+            free(audioBuffer);
+            http.end();
             return;
           } else {
-            SerialBT.println(">>> Person '" + patientName + "' Not Found! Please send another name:");
-            showLCD("Person Not", "Found!");
-            playTrack(7);
+            String heard = String((const char*)(doc["transcribed_name"] | ""));
+            Serial.println("Whisper Understood: '" + heard + "' - Patient Not Found");
+            showLCD("Patient Not", "Found!");
+            playTrack(7); // Track 0007.mp3: Not found
             delay(2500);
-
-            showLCD("Send Name on BT", "Try Again...");
-            currentState = STATE_AWAITING_INPUT;
-            lastActivityTime = millis();
-            return;
           }
         }
       } else {
-        SerialBT.println(">>> Server Error Code: " + String(httpCode));
-        showLCD("Server Error", "Code: " + String(httpCode));
+        Serial.println("Voice Search Error Code: " + String(httpCode));
+        showLCD("Voice Server", "Error: " + String(httpCode));
         delay(2000);
-        setStandbyScreen();
       }
       http.end();
     }
   } else {
-    SerialBT.println(">>> Wi-Fi Error: Not Connected to Server!");
     showLCD("WiFi Error", "Not Connected");
     delay(2000);
-    setStandbyScreen();
   }
+
+  free(audioBuffer);
+  cooldownEndTime = millis() + 4000;
+  setStandbyScreen();
 }
 
+// UDP Auto-Discovery of Backend Server IP
 void discoverServerIP() {
   Serial.println("\n[Auto-Discovery] Searching for Laptop Server on Wi-Fi...");
   showLCD("Finding Server", "Auto-Discovery..");
 
   udpDiscovery.begin(4002);
 
-  // Send up to 5 discovery broadcasts (1 every 300ms)
   for (int attempt = 1; attempt <= 5; attempt++) {
-    // 1. Broadcast to 255.255.255.255
     udpDiscovery.beginPacket(IPAddress(255, 255, 255, 255), 4001);
     udpDiscovery.print("DISCOVER_ROOM_TRACK_BOT");
     udpDiscovery.endPacket();
 
-    // 2. Broadcast to subnet broadcast IP
     IPAddress bIP = WiFi.broadcastIP();
     if (bIP) {
       udpDiscovery.beginPacket(bIP, 4001);
@@ -522,13 +542,7 @@ void sendHeartbeat() {
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/heartbeat";
 
-  bool begun = false;
-  if (url.startsWith("https://")) {
-    secureClient.setInsecure();
-    begun = h.begin(secureClient, url);
-  } else {
-    begun = h.begin(client, url);
-  }
+  bool begun = url.startsWith("https://") ? (secureClient.setInsecure(), h.begin(secureClient, url)) : h.begin(client, url);
 
   if (begun) {
     h.addHeader("Content-Type", "application/json");
@@ -548,13 +562,7 @@ void pollWebsiteDispatch() {
   h.setTimeout(HTTP_TIMEOUT_MS);
   String url = String(API_BASE) + "/device/next-patient";
 
-  bool begun = false;
-  if (url.startsWith("https://")) {
-    secureClient.setInsecure();
-    begun = h.begin(secureClient, url);
-  } else {
-    begun = h.begin(client, url);
-  }
+  bool begun = url.startsWith("https://") ? (secureClient.setInsecure(), h.begin(secureClient, url)) : h.begin(client, url);
 
   if (!begun) return;
   h.addHeader("X-API-Key", API_KEY);
@@ -571,7 +579,7 @@ void pollWebsiteDispatch() {
   h.end();
 }
 
-// Setup
+// ======================== SETUP ========================
 void setup() {
   Serial.begin(115200);
 
@@ -599,18 +607,19 @@ void setup() {
     delay(200);
   }
 
-  connectWiFi();
+  // Initialize INMP441 Microphone via I2S
+  initI2S();
 
-  SerialBT.begin("Room_Track_Bot");
-  Serial.println("Bluetooth Started! Device Name: Room_Track_Bot");
+  connectWiFi();
 
   setStandbyScreen();
 }
 
+// ======================== LOOP ========================
 void loop() {
   unsigned long currentMillis = millis();
 
-  // 1. Check ultrasonic sensor first
+  // 1. Check ultrasonic sensor when cooldown has passed
   if (currentMillis >= cooldownEndTime) {
     long distance = getDistanceCm();
 
@@ -618,33 +627,24 @@ void loop() {
       if (currentState == STATE_STANDBY) {
         currentState = STATE_CONFIRMING_PERSON;
         personDetectionStart = millis();
-        lastActivityTime = millis();
-
         showLCD("Person Detected", "Please Wait...");
-        Serial.println("Person detected. Confirming...");
+        Serial.println("Person detected (< 40cm). Confirming...");
       }
       else if (currentState == STATE_CONFIRMING_PERSON) {
+        // Confirmed person standing for 500ms
         if (currentMillis - personDetectionStart >= 500) {
-          currentState = STATE_AWAITING_INPUT;
-          lastActivityTime = millis();
-
-          showLCD("Welcome!", "Send Name on BT");
-
-          SerialBT.println(
-            "Welcome to Room Track Bot. Please type person name:"
-          );
-
-          playTrack(1);
-          playTrack(2);
+          currentState = STATE_RECORDING;
+          recordAndSearchVoice();
         }
       }
     }
     else if (currentState == STATE_CONFIRMING_PERSON) {
+      // False alarm / person moved away quickly
       setStandbyScreen();
     }
   }
 
-  // 2. Wi-Fi reconnect only when disconnected
+  // 2. Wi-Fi auto-reconnect
   if (WiFi.status() != WL_CONNECTED) {
     ensureWiFiConnected();
   }
@@ -660,23 +660,6 @@ void loop() {
       lastHeartbeat = millis();
       sendHeartbeat();
     }
-  }
-
-  // 4. Bluetooth name input
-  if (SerialBT.available()) {
-    String incomingName = SerialBT.readStringUntil('\n');
-    incomingName.trim();
-
-    if (incomingName.length() > 0) {
-      searchPatient(incomingName);
-    }
-  }
-
-  // 5. Idle timeout
-  if (currentState != STATE_STANDBY &&
-      millis() - lastActivityTime >= IDLE_TIMEOUT_MS) {
-    Serial.println("Idle timeout: Returning to standby.");
-    setStandbyScreen();
   }
 
   delay(25);
