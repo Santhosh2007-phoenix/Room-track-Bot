@@ -54,10 +54,11 @@ String API_BASE          = "http://10.98.247.79:4000/api";
 const char* API_KEY      = "esp32-room-track-bot-secret-key-32chars";
 
 // ======================== PIN ASSIGNMENTS ========================
-static const int TRIG_PIN  = 5;
-static const int ECHO_PIN  = 18;
-static const int DF_RX_PIN = 16; // ESP32 RX (connect to DFPlayer TX)
-static const int DF_TX_PIN = 17; // ESP32 TX (connect to DFPlayer RX via 1k resistor)
+static const int TRIG_PIN      = 5;
+static const int ECHO_PIN      = 18;
+static const int DF_RX_PIN     = 16; // ESP32 RX (connect to DFPlayer TX)
+static const int DF_TX_PIN     = 17; // ESP32 TX (connect to DFPlayer RX via 1k resistor)
+static const int GREEN_LED_PIN = 2;  // Green Indicator LED (Glows when Listening, OFF during processing)
 
 // INMP441 I2S Pins
 #define I2S_PORT        I2S_NUM_0
@@ -216,6 +217,7 @@ void showLCD(String a, String b) {
 
 void setStandbyScreen() {
   currentState = STATE_STANDBY;
+  digitalWrite(GREEN_LED_PIN, LOW); // Ensure Green LED is OFF during standby
   showLCD("Room Track Bot", "Step Forward");
 }
 
@@ -355,6 +357,8 @@ void recordAndSearchVoice() {
   delay(800);
   i2s_zero_dma_buffer(I2S_PORT);
 
+  // Turn ON Green LED when prompt says Speak Name Now
+  digitalWrite(GREEN_LED_PIN, HIGH);
   showLCD("Speak Name Now!", ">>> LISTENING <<<");
   Serial.println("\n[Voice Recording] Listening for 3 seconds...");
 
@@ -430,6 +434,8 @@ void recordAndSearchVoice() {
     Serial.println(">>> [WARNING] Audio is very low or silent! Check INMP441 wiring or speak closer (15 cm)!");
   }
 
+  // Turn OFF Green LED when recording finishes and processing begins
+  digitalWrite(GREEN_LED_PIN, LOW);
   showLCD("Searching...", "Processing Voice");
 
   // Transmit WAV audio via HTTP POST to /api/device/voice-search using streaming WiFiClient
@@ -689,6 +695,9 @@ void setup() {
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+
+  pinMode(GREEN_LED_PIN, OUTPUT);
+  digitalWrite(GREEN_LED_PIN, LOW); // Start with Green LED OFF
 
   Wire.begin(21, 22);
   lcd.init();
