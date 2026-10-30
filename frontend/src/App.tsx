@@ -1,6 +1,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, BedDouble, Bell, Building2, Check, ChevronDown, ClipboardList, Download, Edit3, FileText, LayoutDashboard, LogOut, Menu, Monitor, Plus, RefreshCw, Search, Settings as SettingsIcon, ShieldCheck, Stethoscope, Trash2, Users, Wifi, X, Eye, Layers, Printer, Navigation, MapPin } from 'lucide-react';
+import { Activity, BedDouble, Bell, Building2, Check, ChevronDown, ClipboardList, Download, Edit3, FileText, LayoutDashboard, LogOut, Menu, Monitor, Plus, RefreshCw, Search, Settings as SettingsIcon, ShieldCheck, Stethoscope, Trash2, Users, Wifi, X, Eye, Layers, Printer, Navigation, MapPin, Mic, MicOff } from 'lucide-react';
 import { api, clearToken, csvDownload, getToken, setToken } from './api';
 import { FloorMapModal } from './FloorMapModal';
 
@@ -21,12 +21,94 @@ function VisitorApp(){
  const [name,setName]=useState(''); const [patients,setPatients]=useState<any[]>([]); const [searched,setSearched]=useState(false);
  const [loading,setLoading]=useState(false); const [error,setError]=useState('');
  const [mapPatient,setMapPatient]=useState<any>(null);
- async function search(e?:React.FormEvent){e?.preventDefault();setError('');setPatients([]);setSearched(false);setLoading(true);
-  try{const r=await fetch(`${BASE}/visitor/search?name=${encodeURIComponent(name.trim())}`);const d=await r.json();if(!r.ok)throw new Error(d.message||'Unable to search right now.');setSearched(true);if(d.found){const list=d.patients||(d.patient?[d.patient]:[]);setPatients(list);}}
+ const [isListening,setIsListening]=useState(false);
+ const [voiceStatus,setVoiceStatus]=useState('');
+
+ async function search(e?:React.FormEvent, overrideName?: string){
+  e?.preventDefault();
+  const queryName = (overrideName !== undefined ? overrideName : name).trim();
+  if(!queryName) return;
+  setError('');
+  setVoiceStatus('');
+  setPatients([]);
+  setSearched(false);
+  setLoading(true);
+  try{
+    const r=await fetch(`${BASE}/visitor/search?name=${encodeURIComponent(queryName)}`);
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.message||'Unable to search right now.');
+    setSearched(true);
+    if(d.found){
+      const list=d.patients||(d.patient?[d.patient]:[]);
+      setPatients(list);
+    }
+  }
   catch{setError('Unable to connect right now. Please try again.');}
   finally{setLoading(false);}
  }
- return <div className="visitor-shell"><header className="visitor-header"><div className="visitor-brand"><span><Activity size={25}/></span><div><b>ROOM TRACK BOT</b><small>Smart Hospital Patient Location System</small></div></div></header><main className="visitor-main"><div className="visitor-badge"><Search size={15}/> VISITOR ASSISTANCE</div><h1>Find a Patient</h1><p className="visitor-subtitle">Enter the patient's name to find their room.</p><form className="visitor-search-card" onSubmit={search}><label htmlFor="patient-name">Patient Name</label><input id="patient-name" value={name} onChange={e=>setName(e.target.value)} placeholder="Enter Patient Name" autoComplete="off" required maxLength={100}/><button className="btn primary visitor-find" disabled={loading||!name.trim()}>{loading?'Please wait...':'FIND ROOM'} <span>&rarr;</span></button><p className="visitor-privacy">Patient details, father's name, city and room location are shown.</p></form>
+
+ function toggleVoiceSearch(){
+  const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  if (!SpeechRec) {
+    setError('Voice search is not supported in this browser. Please use Chrome, Edge, or Safari.');
+    return;
+  }
+
+  if (isListening) {
+    setIsListening(false);
+    setVoiceStatus('');
+    return;
+  }
+
+  try {
+    const recognition = new SpeechRec();
+    recognition.lang = 'en-IN';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      setError('');
+      setVoiceStatus('Listening... Speak patient name now!');
+    };
+
+    recognition.onresult = (event: any) => {
+      setIsListening(false);
+      setVoiceStatus('');
+      const transcript = event.results?.[0]?.[0]?.transcript;
+      if (transcript) {
+        const clean = transcript.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '').trim();
+        setName(clean);
+        search(undefined, clean);
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      setIsListening(false);
+      if (event.error === 'no-speech') {
+        setVoiceStatus('No speech detected. Please try again.');
+        setTimeout(() => setVoiceStatus(''), 3000);
+      } else if (event.error === 'not-allowed') {
+        setError('Microphone permission denied. Please allow microphone access in your browser.');
+      } else {
+        setVoiceStatus(`Voice error: ${event.error}`);
+        setTimeout(() => setVoiceStatus(''), 3000);
+      }
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.start();
+  } catch (err: any) {
+    setIsListening(false);
+    setError('Could not access microphone: ' + err.message);
+  }
+ }
+
+ return <div className="visitor-shell"><header className="visitor-header"><div className="visitor-brand"><span><Activity size={25}/></span><div><b>ROOM TRACK BOT</b><small>Smart Hospital Patient Location System</small></div></div></header><main className="visitor-main"><div className="visitor-badge"><Search size={15}/> VISITOR ASSISTANCE</div><h1>Find a Patient</h1><p className="visitor-subtitle">Enter the patient's name to find their room.</p><form className="visitor-search-card" onSubmit={search}><label htmlFor="patient-name">Patient Name</label><div style={{position:'relative',display:'flex',alignItems:'center'}}><input id="patient-name" value={name} onChange={e=>setName(e.target.value)} placeholder={isListening ? "Listening... Speak name now!" : "Enter Patient Name or Speak"} autoComplete="off" required maxLength={100} style={{paddingRight:'48px',borderColor:isListening?'#0f766e':undefined,boxShadow:isListening?'0 0 0 3px rgba(15,118,110,0.2)':undefined,transition:'all 0.2s ease'}}/><button type="button" onClick={toggleVoiceSearch} title={isListening?"Listening... Click to cancel":"Click to speak patient name"} aria-label="Voice Search" style={{position:'absolute',right:'7px',width:'38px',height:'38px',borderRadius:'50%',border:isListening?'2px solid #ef4444':'1px solid #cbd5e1',background:isListening?'#fee2e2':'#f8fafc',color:isListening?'#dc2626':'#0f766e',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',boxShadow:isListening?'0 0 12px rgba(239,68,68,0.5)':'none',transition:'all 0.2s ease'}}>{isListening?<MicOff size={19}/>:<Mic size={19}/>}</button></div>{voiceStatus&&<div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:isListening?'#0f766e':'#64748b',marginTop:'7px',fontWeight:600}}><span style={{display:'inline-block',width:'8px',height:'8px',borderRadius:'50%',background:isListening?'#22c55e':'#94a3b8',animation:isListening?'ping 1s cubic-bezier(0,0,0.2,1) infinite':'none'}}/>{voiceStatus}</div>}<button className="btn primary visitor-find" disabled={loading||!name.trim()}>{loading?'Please wait...':'FIND ROOM'} <span>&rarr;</span></button><p className="visitor-privacy">Patient details, father's name, city and room location are shown.</p></form>
  {error&&<div className="visitor-message visitor-error" role="alert">{error}<button className="btn secondary" onClick={()=>search()} type="button">TRY AGAIN</button></div>}
  {searched&&patients.length===0&&!error&&<div className="visitor-message visitor-not-found"><div className="visitor-result-icon">!</div><h2>PATIENT NOT FOUND</h2><p>Please check the patient name and try again.</p><button className="btn secondary" onClick={()=>{setName('');setPatients([]);setSearched(false);}}>TRY AGAIN</button></div>}
  {patients.length>0&&<section className="visitor-result"><div className="visitor-result-title"><span className="visitor-result-icon"><Check size={21}/></span><div><b>{patients.length>1?`${patients.length} PATIENTS FOUND`:'PATIENT FOUND'}</b><small>{patients.length>1?'Please check your patient details below based on Father Name / City':'Location details'}</small></div></div><div style={{display:'flex',flexDirection:'column',gap:'20px',marginTop:'14px'}}>{patients.map((p:any,idx:number)=><div key={p.id||idx} style={{background:patients.length>1?'#f8fafc':'transparent',border:patients.length>1?'1px solid #e2e8f0':'none',borderRadius:'14px',padding:patients.length>1?'18px':'0'}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',margin:'14px 0 16px'}}><div><h2 style={{margin:0,fontSize:patients.length>1?'1.35rem':'1.65rem',fontWeight:800,color:'#0f172a',letterSpacing:'-0.5px'}}>{p.name}</h2>{(p.father_name||p.city)&&<div style={{fontSize:'0.9rem',color:'#64748b',marginTop:'6px'}}>{p.father_name&&<span>Father/Spouse: <b style={{color:'#0f172a'}}>{p.father_name}</b></span>}{p.father_name&&p.city&&<span> &bull; </span>}{p.city&&<span>City/Village: <b style={{color:'#0f172a'}}>{p.city}</b></span>}</div>}</div>{p.id&&<span style={{fontSize:'0.75rem',fontWeight:700,background:'#e2e8f0',color:'#475569',padding:'3px 10px',borderRadius:'999px'}}>ID: {p.id}</span>}</div><div className="visitor-location"><div><small>FLOOR</small><strong>{p.floor}</strong></div><div><small>ROOM</small><strong>{p.room}</strong></div></div><div style={{marginTop:'16px'}}><button type="button" className="btn primary" style={{width:'100%',padding:'13px',display:'flex',alignItems:'center',justifyContent:'center',gap:'8px',fontSize:'13px',fontWeight:750,letterSpacing:'0.4px',background:'#0f766e',borderColor:'#0f766e',borderRadius:'11px',boxShadow:'0 4px 12px rgba(15, 118, 110, 0.2)'}} onClick={()=>setMapPatient(p)}><Navigation size={17}/> TRACK PERSON</button></div></div>)}</div></section>}
